@@ -41,8 +41,8 @@
   }
 
   /* ---------- names ---------- */
-  $("my-name").value = localStorage.getItem("ss_name") || "";
-  $("p2-name").value = localStorage.getItem("ss_p2name") || "";
+  $("my-name").value = Store.get("ss_name") || "";
+  $("p2-name").value = Store.get("ss_p2name") || "";
   function myName() { return ($("my-name").value.trim() || "Player 1").slice(0, 12); }
   function p2Name() { return ($("p2-name").value.trim() || "Player 2").slice(0, 12); }
 
@@ -50,13 +50,13 @@
   $("btn-howto").onclick = () => show("screen-howto");
   $("btn-howto-back").onclick = () => show("screen-home");
   $("btn-online").onclick = () => {
-    localStorage.setItem("ss_name", myName());
+    Store.set("ss_name", myName());
     $("online-hosting").classList.add("hidden");
     $("online-choice").classList.remove("hidden");
     $("online-status").textContent = "";
     show("screen-online");
   };
-  $("btn-couch").onclick = () => { localStorage.setItem("ss_name", myName()); show("screen-couch"); };
+  $("btn-couch").onclick = () => { Store.set("ss_name", myName()); show("screen-couch"); };
   $("btn-online-back").onclick = () => { Net.close(); show("screen-home"); };
   $("btn-couch-back").onclick = () => show("screen-home");
 
@@ -129,7 +129,7 @@
   $("btn-couch-start").onclick = () => {
     S.mode = "couch"; S.isHost = true;
     S.myName = myName(); S.p2Name = p2Name();
-    localStorage.setItem("ss_p2name", S.p2Name);
+    Store.set("ss_p2name", S.p2Name);
     enterLobby();
   };
 

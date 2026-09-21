@@ -1,7 +1,13 @@
 /* Slice & Spite — tiny WebAudio synth, no sound files. */
 (function () {
+  // storage that never throws (iOS private mode, sandboxed embeds)
+  window.Store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  };
+
   let ctx = null;
-  let muted = localStorage.getItem("ss_muted") === "1";
+  let muted = Store.get("ss_muted") === "1";
 
   function ensure() {
     if (!ctx) {
@@ -55,7 +61,7 @@
   const SFX = {
     unlock() { ensure(); },
     get muted() { return muted; },
-    toggleMute() { muted = !muted; localStorage.setItem("ss_muted", muted ? "1" : "0"); return muted; },
+    toggleMute() { muted = !muted; Store.set("ss_muted", muted ? "1" : "0"); return muted; },
     swish()  { noise(0.12, 0.08, 1800, 1.2, 4200); },
     splat()  { noise(0.10, 0.22, 500, 0.8); tone(160, 0.09, "sine", 0.18, 90); },
     combo(n) { const base = 500 + Math.min(n, 6) * 120; tone(base, 0.1, "square", 0.08); setTimeout(() => tone(base * 1.5, 0.12, "square", 0.08), 70); },
