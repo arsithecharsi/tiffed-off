@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Slice &amp; Spite">
+<meta name="theme-color" content="#12081f">
+<title>Slice &amp; Spite</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ============ HOME ============ -->
+<div class="screen active" id="screen-home">
+  <div class="home-inner">
+    <h1 class="title"><span class="t1">SLICE</span> <span class="amp">&amp;</span> <span class="t2">SPITE</span></h1>
+    <p class="tag">🍉 Fruit Ninja &times; Bloons Battles — for two 💣</p>
+    <label class="name-label">Your name
+      <input id="my-name" maxlength="12" placeholder="Player 1" autocomplete="off">
+    </label>
+    <div class="home-btns">
+      <button class="big-btn" id="btn-online">📱📲 Two Phones</button>
+      <button class="big-btn alt" id="btn-couch">🛋️ One Device</button>
+    </div>
+    <p class="howto" id="btn-howto">How to play?</p>
+  </div>
+</div>
+
+<!-- ============ HOW TO ============ -->
+<div class="screen" id="screen-howto">
+  <div class="panel-card">
+    <h2>How to play</h2>
+    <p><b>🔪 The Slicer</b> swipes to slice fruit for points. Slicing a 💣 costs a heart — lose all 3 and the round ends. Missed fruit costs points.</p>
+    <p><b>😈 The Saboteur</b> earns coins over time and spends them to attack: throw bombs into fruit clusters, send disguised trap fruit, fog the screen, flood it with chaos, or buy Eco for more income.</p>
+    <p>Each round lasts 90 seconds, then you swap roles. <b>Highest slicing score wins!</b></p>
+    <p class="hint">Trap fruit look like watermelons… but they sparkle purple if you look closely. 👀</p>
+    <button class="big-btn" id="btn-howto-back">Got it</button>
+  </div>
+</div>
+
+<!-- ============ ONLINE SETUP ============ -->
+<div class="screen" id="screen-online">
+  <div class="panel-card">
+    <h2>Two Phones</h2>
+    <div id="online-choice">
+      <button class="big-btn" id="btn-host">Create a game</button>
+      <div class="or">— or —</div>
+      <label class="name-label">Join with a code
+        <input id="join-code" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters">
+      </label>
+      <button class="big-btn alt" id="btn-join">Join</button>
+    </div>
+    <div id="online-hosting" class="hidden">
+      <p>Tell your partner the code:</p>
+      <div class="room-code" id="room-code">····</div>
+      <p class="hint" id="host-status">Setting up…</p>
+    </div>
+    <p class="hint" id="online-status"></p>
+    <button class="text-btn" id="btn-online-back">← Back</button>
+  </div>
+</div>
+
+<!-- ============ COUCH SETUP ============ -->
+<div class="screen" id="screen-couch">
+  <div class="panel-card">
+    <h2>One Device</h2>
+    <label class="name-label">Player 2's name
+      <input id="p2-name" maxlength="12" placeholder="Player 2" autocomplete="off">
+    </label>
+    <p class="hint">The Slicer swipes the arena. The Saboteur uses the control deck at the bottom — you'll share the screen. (Best on a big phone or iPad!)</p>
+    <button class="big-btn" id="btn-couch-start">Continue</button>
+    <button class="text-btn" id="btn-couch-back">← Back</button>
+  </div>
+</div>
+
+<!-- ============ LOBBY ============ -->
+<div class="screen" id="screen-lobby">
+  <div class="panel-card">
+    <h2>Ready up!</h2>
+    <div class="lobby-players" id="lobby-players"></div>
+    <div id="lobby-pick">
+      <p>Who slices first?</p>
+      <div class="pick-row">
+        <button class="big-btn small" id="pick-a"></button>
+        <button class="big-btn small alt" id="pick-b"></button>
+      </div>
+    </div>
+    <p class="hint" id="lobby-status"></p>
+  </div>
+</div>
+
+<!-- ============ GAME ============ -->
+<div class="screen game" id="screen-game">
+  <div class="hud" id="hud">
+    <div class="hud-left" id="hud-left"></div>
+    <div class="hud-mid" id="hud-mid"></div>
+    <div class="hud-right" id="hud-right"></div>
+  </div>
+  <div class="timerbar"><div class="timerbar-fill" id="timer-fill"></div></div>
+  <div class="arena-wrap" id="arena-wrap">
+    <canvas id="arena"></canvas>
+    <div class="countdown hidden" id="countdown"></div>
+    <div class="role-banner hidden" id="role-banner"></div>
+  </div>
+  <div class="bomber-deck hidden" id="bomber-deck">
+    <div class="aim-strip hidden" id="aim-strip"><div class="aim-cursor" id="aim-cursor">▲</div></div>
+    <div class="weapon-row" id="weapon-row"></div>
+  </div>
+</div>
+
+<!-- ============ INTERMISSION ============ -->
+<div class="screen" id="screen-inter">
+  <div class="panel-card">
+    <h2 id="inter-title">Round over!</h2>
+    <div class="score-lines" id="inter-lines"></div>
+    <p id="inter-next"></p>
+    <button class="big-btn" id="btn-ready">I'm ready!</button>
+    <p class="hint" id="inter-status"></p>
+  </div>
+</div>
+
+<!-- ============ RESULTS ============ -->
+<div class="screen" id="screen-results">
+  <div class="panel-card">
+    <h2 id="results-title">🏆</h2>
+    <div class="score-lines" id="results-lines"></div>
+    <button class="big-btn" id="btn-rematch">Rematch!</button>
+    <button class="text-btn" id="btn-home">← Home</button>
+    <p class="hint" id="results-status"></p>
+  </div>
+</div>
+
+<div id="rotate-overlay"><div>📱 Please rotate to portrait!</div></div>
+<div id="toasts"></div>
+<button id="mute-btn" title="Sound">🔊</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.5/peerjs.min.js"></script>
+<script src="js/sfx.js"></script>
+<script src="js/net.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
