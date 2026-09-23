@@ -1,5 +1,5 @@
 // Generates icons/icon-512.png and icon-180.png with zero dependencies:
-// software-rasterized watermelon + bomb on a purple gradient, hand-encoded PNG.
+// TIFFED OFF! — hand-styled strawberry + bomb on cream paper, hand-encoded PNG.
 import { deflateSync } from "node:zlib";
 import { writeFileSync, mkdirSync } from "node:fs";
 
@@ -33,7 +33,7 @@ function encodePNG(px, w, h) {
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
-  ihdr[8] = 8; ihdr[9] = 6; // 8-bit RGBA
+  ihdr[8] = 8; ihdr[9] = 6;
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr),
@@ -42,50 +42,77 @@ function encodePNG(px, w, h) {
   ]);
 }
 
-function lerp(a, b, t) { return a + (b - a) * t; }
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// strawberry body: point-in-union of circles along a shrinking spine (512-space)
+function berryDist(x, y) {
+  let best = 1e9;
+  for (let i = 0; i <= 16; i++) {
+    const t = i / 16;
+    const cy = 218 + 180 * t;
+    const r = lerp(118, 22, t * t * 0.55 + t * 0.45);
+    const d = Math.hypot(x - 236, y - cy) - r;
+    if (d < best) best = d;
+  }
+  return best;
+}
+function crownTop(x) {
+  const rel = x - 128;
+  const tooth = Math.abs(((rel % 72) + 72) % 72 - 36);
+  return 152 + tooth * 1.55;
+}
 
 function makeIcon(size) {
   const px = Buffer.alloc(size * size * 4);
   const k = size / 512;
   const corner = 110 * k;
   const put = (i, r, g, b, a = 255) => { px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = a; };
+  const seeds = [[196, 300], [268, 292], [232, 352], [200, 388], [270, 372], [236, 430]];
 
-  const seeds = [[-60, 60], [10, 95], [70, 55], [-15, 40], [45, 120], [-80, 115]];
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      // rounded-rect mask
-      const cx = Math.max(corner - x, x - (size - 1 - corner), 0);
-      const cy = Math.max(corner - y, y - (size - 1 - corner), 0);
-      if (cx * cx + cy * cy > corner * corner) { put(i, 0, 0, 0, 0); continue; }
-      // diagonal gradient purple -> magenta
-      const t = (x + y) / (2 * size);
-      put(i, lerp(0x2a, 0xb0, t) | 0, lerp(0x12, 0x1c, t) | 0, lerp(0x45, 0x55, t) | 0);
+  for (let yy = 0; yy < size; yy++) {
+    for (let xx = 0; xx < size; xx++) {
+      const i = (yy * size + xx) * 4;
+      const x = xx / k, y = yy / k;
+      // rounded-rect mask + ink sticker border
+      const cx = Math.max(corner - xx, xx - (size - 1 - corner), 0);
+      const cy = Math.max(corner - yy, yy - (size - 1 - corner), 0);
+      const cd = Math.sqrt(cx * cx + cy * cy);
+      if (cd > corner) { put(i, 0, 0, 0, 0); continue; }
+      put(i, 0xf7, 0xef, 0xdf); // cream paper
+      if (cd > corner - 14 * k || xx < 14 * k || yy < 14 * k || xx > size - 1 - 14 * k || yy > size - 1 - 14 * k) {
+        const edge = Math.min(xx, yy, size - 1 - xx, size - 1 - yy);
+        if (cd > corner - 14 * k || edge < 14 * k) { put(i, 0x2a, 0x26, 0x24); continue; }
+      }
 
-      // watermelon: semicircle, flat edge up, centered lower-left
-      const mx = (x - 225 * k) / k, my = (y - 300 * k) / k;
-      const d = Math.hypot(mx, my);
-      if (my >= 0 && d <= 185) {
-        if (d > 157) put(i, 0x25, 0xc0, 0x4a);           // green rind
-        else if (d > 140) put(i, 0xe8, 0xff, 0xe8);      // white inner rind
+      // crown (drawn under the berry top)
+      if (y > crownTop(x) && y < 240 && Math.abs(x - 236) < 118) {
+        put(i, 0x3f, 0x9b, 0x4f);
+        if (y < crownTop(x) + 9) put(i, 0x2a, 0x26, 0x24);
+      }
+
+      // berry
+      const bd = berryDist(x, y);
+      if (bd <= 0 && y > 205) {
+        if (bd > -11) put(i, 0x2a, 0x26, 0x24);               // ink outline
         else {
-          put(i, 0xff, 0x4f, 0x6d);                       // flesh
+          put(i, 0xe5, 0x25, 0x4f);
           for (const [sx, sy] of seeds) {
-            if (Math.hypot(mx - sx, (my - sy) * 1.6) < 11) put(i, 0x22, 0x11, 0x22);
+            if (Math.hypot((x - sx) * 1.4, y - sy) < 9) put(i, 0xff, 0xd9, 0xa8);
           }
+          if (Math.hypot((x - 190) * 1.1, (y - 268) * 1.7) < 30) put(i, 0xff, 0x8f, 0xa8); // highlight
         }
       }
-      if (my >= -8 && my < 0 && Math.abs(mx) <= 185) put(i, 0xff, 0x8f, 0xa5); // flat top edge
 
-      // bomb: top right
-      const bx = (x - 375 * k) / k, by = (y - 165 * k) / k;
-      const bd = Math.hypot(bx, by);
-      if (bd <= 62) {
-        put(i, 0x26, 0x26, 0x30);
-        if (Math.hypot(bx + 20, by + 20) < 18) put(i, 0x55, 0x55, 0x66); // highlight
+      // bomb top-right
+      const bx = x - 398, by = y - 142;
+      const bbd = Math.hypot(bx, by) - 62;
+      if (bbd <= 0) {
+        put(i, bbd > -10 ? 0x2a : 0x35, bbd > -10 ? 0x26 : 0x31, bbd > -10 ? 0x24 : 0x3c);
+        if (Math.hypot(bx + 22, by + 20) < 16) put(i, 0x5a, 0x55, 0x66);
       }
-      if (Math.abs(bx - 28) < 7 && by > -85 && by < -55) put(i, 0x8a, 0x6d, 0x3b); // fuse
-      if (Math.hypot(bx - 28, by + 92) < 13) put(i, 0xff, 0xd9, 0x4d);             // spark
+      if (Math.abs(bx - 32 - (by + 74) * 0.35) < 7 && by > -96 && by < -56) put(i, 0x2a, 0x26, 0x24); // fuse
+      if (Math.abs(bx - 42) + Math.abs(by + 104) < 18) put(i, 0xf0, 0xa8, 0x21);                       // spark
+      if (Math.abs(bx - 42) + Math.abs(by + 104) < 7) put(i, 0xe5, 0x25, 0x4f);
     }
   }
   return encodePNG(px, size, size);

@@ -64,6 +64,7 @@
     toggleMute() { muted = !muted; Store.set("ss_muted", muted ? "1" : "0"); return muted; },
     swish()  { noise(0.12, 0.08, 1800, 1.2, 4200); },
     splat()  { noise(0.10, 0.22, 500, 0.8); tone(160, 0.09, "sine", 0.18, 90); },
+    straw()  { noise(0.08, 0.16, 700, 0.9); tone(740, 0.09, "sine", 0.12); setTimeout(() => tone(990, 0.11, "sine", 0.1), 55); },
     combo(n) { const base = 500 + Math.min(n, 6) * 120; tone(base, 0.1, "square", 0.08); setTimeout(() => tone(base * 1.5, 0.12, "square", 0.08), 70); },
     boom()   { tone(120, 0.5, "sine", 0.4, 40); noise(0.45, 0.35, 300, 0.6, 80); },
     trap()   { tone(300, 0.25, "sawtooth", 0.15, 90); noise(0.2, 0.15, 900, 1); },

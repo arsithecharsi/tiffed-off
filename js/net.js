@@ -77,6 +77,20 @@
       peer.on("error", (err) => { if (cb) cb(err); });
     },
 
+    rejoin() {
+      // guest-side reconnect into the same room (host just waits for us)
+      if (this.isHost) return;
+      this._closedByUs = false;
+      try {
+        if (this.peer && !this.peer.destroyed) {
+          const conn = this.peer.connect(PREFIX + this.code, { reliable: true });
+          this._wireConn(conn);
+        } else {
+          this.join(this.code);
+        }
+      } catch (e) {}
+    },
+
     close() {
       // Note: does NOT clear message handlers — wireNetFlow() resets them itself,
       // because host()/join() call close() after handlers are already registered.

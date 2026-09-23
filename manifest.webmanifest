@@ -1,11 +1,11 @@
 {
-  "name": "Slice & Spite",
-  "short_name": "Slice&Spite",
+  "name": "TIFFED OFF!",
+  "short_name": "TIFFED OFF!",
   "start_url": ".",
   "display": "fullscreen",
   "orientation": "portrait",
-  "background_color": "#12081f",
-  "theme_color": "#12081f",
+  "background_color": "#f7efdf",
+  "theme_color": "#f7efdf",
   "icons": [
     { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
