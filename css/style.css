@@ -80,6 +80,7 @@ input::placeholder { color: #b9b0a2; }
 .hint { font-size: 13px; color: #7c7468; }
 .or { color: var(--grey); margin: 12px 0 2px; }
 .purple { color: var(--purple); }
+.green { color: var(--green); }
 
 /* ---------- poster home ---------- */
 .poster { overflow: hidden; }

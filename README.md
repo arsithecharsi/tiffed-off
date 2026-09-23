@@ -18,19 +18,30 @@ earnings to ruin each other's run.
   ×3 combo pays almost exactly the price of your cheapest attack — land a
   combo, immediately spend it.
 - Bombs fall on their own too, independent of anything either player buys —
-  ordinary Fruit Ninja risk, escalating over the match.
+  ordinary Fruit Ninja risk, escalating over the match. About 1 in 5 of those
+  ambient bombs is secretly a **dud** (a faint green glint instead of the
+  usual fuse spark). Swipe one and it's harmless but you get nothing; **tap**
+  it instead and you defuse it for +10 score / +$15 — a distinct gesture for a
+  distinct payoff.
+- Losing a heart costs score too, and it gets worse each time: **−30 / −50 /
+  −70** for your 1st/2nd/3rd heart. A close match can flip entirely on
+  whoever's down to their last heart.
 - **Spend** coins on attacks. They physically launch onto the other board on a
   randomized fuse, shown in the victim's **INCOMING lane**:
-  - `BOMB $20` — cheap, fast, and silent (no banner). Reads like ambient bad
-    luck, not a telegraphed event, so dodging it is just spatial awareness.
-    Flick the button to bias where the scatter lands.
-  - `FAKE $45` — a disguised bomb shaped like a strawberry; it sparkles purple
-    if you look closely. Slicing it costs 30 points.
-  - `RUSH $50` — a 6-fruit chaos burst (their misses cost them score).
-  - `GUST $55` — for 10 seconds, fruit *and* bombs can enter their board from
-    any edge, not just the bottom. Top-drops have no apex to time at all;
-    side-arcs move fast and read nothing like the familiar bottom-up parabola.
-    A steady border frame marks the window the whole time.
+  - `BOMB $20`, 1.8s cooldown — cheap, fast, and silent (no banner). Reads
+    like ambient bad luck, not a telegraphed event, so dodging it is just
+    spatial awareness. Flick the button to bias where the scatter lands.
+    Cheap and fast enough to fire constantly as a low-grade pressure tool.
+  - `FAKE $45`, 4.5s cooldown — a disguised bomb shaped like a strawberry; it
+    sparkles purple if you look closely. Slicing it costs 30 points *and*
+    steals 20% of the victim's current coins, straight into the attacker's
+    pocket.
+  - `RUSH $50`, 9s cooldown — a 6-object chaos burst: mostly fruit, but 1-2 of
+    them are real bombs hidden in the mix. Tempting, not a gift.
+  - `GUST $55`, 14s cooldown — for 10 seconds, fruit *and* bombs can enter
+    their board from any edge, not just the bottom. Top-drops have no apex to
+    time at all; side-arcs move fast and read nothing like the familiar
+    bottom-up parabola. A steady border frame marks the window the whole time.
 - Matches escalate: clean slicing early, ridiculous by the last 20 seconds.
 - **Win by KO** (all 3 of their hearts) **or top score** at 90 seconds.
 - Post-match: stats, trash-talk headlines, and an all-time head-to-head tally.

@@ -69,6 +69,8 @@
     perfect() { tone(1400, 0.09, "sine", 0.13); setTimeout(() => tone(1900, 0.13, "sine", 0.1), 45); },
     boom()   { tone(120, 0.5, "sine", 0.4, 40); noise(0.45, 0.35, 300, 0.6, 80); },
     trap()   { tone(300, 0.25, "sawtooth", 0.15, 90); noise(0.2, 0.15, 900, 1); },
+    steal()  { tone(500, 0.12, "sawtooth", 0.12, 260); setTimeout(() => tone(260, 0.14, "sawtooth", 0.1), 60); },
+    defuse() { tone(700, 0.06, "square", 0.1); setTimeout(() => tone(1100, 0.08, "square", 0.1), 55); setTimeout(() => tone(1500, 0.14, "sine", 0.12), 110); },
     miss()   { tone(220, 0.15, "triangle", 0.1, 150); },
     coin()   { tone(900, 0.07, "square", 0.07); setTimeout(() => tone(1350, 0.1, "square", 0.07), 60); },
     send()   { noise(0.15, 0.1, 700, 1.4, 2400); },

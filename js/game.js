@@ -19,8 +19,12 @@
   // (3 fruit @ 4 coin + this bonus) lands near $20, exactly the cheapest attack
   const COMBO_COIN = { 3: 8, 4: 14 };            // 5+ => 25 (coins — combos fund attacks)
   const MISS_PENALTY = 5, TRAP_PENALTY = 30;
+  const HEART_PENALTY = [30, 50, 70];             // score cost of the 1st/2nd/3rd heart lost — gets worse as you get low
   const BOMB_BLAST = 260;
   const NATURAL_BOMB_CHANCE = [0.02, 0.16];      // [early, late] — ambient Fruit-Ninja-style risk, independent of attacks
+  const DUD_CHANCE = 0.2;                         // ~1 in 5 ambient bombs is a dud — tap (don't swipe) to defuse for a bonus
+  const DUD_SCORE = 10, DUD_COIN = 15;
+  const TAP_MAX_MS = 220, TAP_MAX_DIST = 26;      // a touch this short/still is a tap, not a swipe
   const GUST_CHAOS_MS = 10000;                    // fruit/bombs can enter from any edge for this long — apexes get hard to read
 
   const FRUITS = [
@@ -36,6 +40,7 @@
   FRUITS.forEach((f) => (KINDS[f.k] = f));
   KINDS.bomb = { k: "bomb", spr: "bomb",  juice: "#5a5566", r: 66 };
   KINDS.trap = { k: "trap", spr: "straw", juice: "#8c46c8", r: 58 }; // the fake strawberry
+  KINDS.dud  = { k: "dud",  spr: "bomb",  juice: "#5a5566", r: 66 }; // looks identical to a bomb — tell is a green glint
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -78,7 +83,7 @@
       this.popups = [];
       this.trails = new Map(); // pointerId -> {pts:[], count, lastSlice, swished}
       this.score = 0; this.hearts = HEARTS;
-      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0 };
+      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0, dudsDefused: 0 };
       this.running = false;
       this.roundStart = 0; this.roundDur = ROUND_MS;
       this.nextNatural = 0; this.nextBurst = 0;
@@ -130,7 +135,7 @@
       this.entities = []; this.pieces = []; this.particles = [];
       this.popups = [];
       this.score = 0; this.hearts = HEARTS;
-      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0 };
+      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0, dudsDefused: 0 };
       this.windUntil = 0;
       this.roundDur = dur || ROUND_MS;
       this.roundStart = this.now();
@@ -167,8 +172,9 @@
     spawnNatural(prog) {
       // ambient Fruit-Ninja-style risk: a fraction of "normal" spawns are just bombs,
       // independent of anything either player bought — rate climbs with the match arc.
+      // A slice of those bombs are secretly duds (safe — tap to defuse for a bonus).
       const isBomb = Math.random() < lerp(NATURAL_BOMB_CHANCE[0], NATURAL_BOMB_CHANCE[1], prog);
-      const kind = isBomb ? "bomb" : FRUITS[(Math.random() * FRUITS.length) | 0].k;
+      const kind = isBomb ? (Math.random() < DUD_CHANCE ? "dud" : "bomb") : FRUITS[(Math.random() * FRUITS.length) | 0].k;
       const crit = !isBomb && Math.random() < CRIT_CHANCE;
       if (this.windUntil && this.simT() < this.windUntil) { this.spawnChaos(kind, crit); return; }
       const x0 = rand(120, W - 120);
@@ -216,9 +222,14 @@
       } else if (w === "trap") {
         this.spawn("trap", ax + rand(-30, 30), rand(-40, 40), rand(0.12, 0.32));
       } else if (w === "flood") {
-        for (let i = 0; i < 6; i++) {
-          const f = FRUITS[(Math.random() * FRUITS.length) | 0];
-          this.spawn(f.k, rand(100, W - 100), rand(-90, 90), rand(0.1, 0.36), i * 130); // flood fruit never crit
+        // tempting, not a gift: real fruit AND 1-2 real bombs hidden in the same burst
+        const n = 6, bombCount = 1 + (Math.random() < 0.5 ? 1 : 0);
+        const bombSlots = new Set();
+        while (bombSlots.size < bombCount) bombSlots.add((Math.random() * n) | 0);
+        for (let i = 0; i < n; i++) {
+          const x0 = rand(100, W - 100), vx = rand(-90, 90), apexFrac = rand(0.1, 0.36), delay = i * 130;
+          if (bombSlots.has(i)) this.spawn("bomb", x0, vx, apexFrac, delay);
+          else this.spawn(FRUITS[(Math.random() * FRUITS.length) | 0].k, x0, vx, apexFrac, delay); // flood fruit never crit
         }
       } else if (w === "gust") {
         this.windUntil = this.simT() + GUST_CHAOS_MS;
@@ -242,14 +253,24 @@
     /* ---------- input ---------- */
     bindInput() {
       const down = (ev) => {
-        this.canvas.setPointerCapture && this.canvas.setPointerCapture(ev.pointerId);
+        try { this.canvas.setPointerCapture && this.canvas.setPointerCapture(ev.pointerId); } catch (err) {}
         this.trails.set(ev.pointerId, { pts: [], count: 0, lastSlice: 0, swished: 0 });
         this.addTrailPoint(ev);
       };
       const move = (ev) => { if (this.trails.has(ev.pointerId)) this.addTrailPoint(ev); };
       const up = (ev) => {
         const tr = this.trails.get(ev.pointerId);
-        if (tr) this.finalizeCombo(tr);
+        if (tr) {
+          // a touch this short and this still is a tap, not a swipe — try to defuse a dud there
+          const first = tr.pts[0];
+          if (first && this.running) {
+            const rel = this.clientToWorld(ev.clientX, ev.clientY);
+            const dt = this.now() - first.t;
+            const dist = Math.hypot(rel.x - first.x, rel.y - first.y);
+            if (dt < TAP_MAX_MS && dist < TAP_MAX_DIST) this.tryDefuse(rel);
+          }
+          this.finalizeCombo(tr);
+        }
         this.trails.delete(ev.pointerId);
       };
       this.canvas.addEventListener("pointerdown", down);
@@ -292,6 +313,7 @@
           e.alive = false;
           if (e.kind === "bomb") { this.hitBomb(e, p, simT); return; }
           if (e.kind === "trap") { this.hitTrap(e, p); continue; }
+          if (e.kind === "dud") { this.missDud(p); continue; }
           this.burstSlice(e, p, def, angle);
           // score rewards timing, not just contact: slice near the apex (low vertical speed)
           // for a big bonus, so nonstop spam-swiping stops being the optimal strategy
@@ -329,8 +351,47 @@
       return (cx - px) ** 2 + (cy - py) ** 2 <= r * r;
     }
 
+    // taps (not swipes) hunt for a dud at the touch point — see the `up` handler
+    tryDefuse(pos) {
+      const simT = this.simT();
+      for (const e of this.entities) {
+        if (!e.alive || e.kind !== "dud") continue;
+        const p = this.posOf(e, simT);
+        if (!p) continue;
+        if (Math.hypot(pos.x - p.x, pos.y - p.y) <= KINDS.dud.r + 20) {
+          e.alive = false;
+          this.hitDud(p);
+          return;
+        }
+      }
+    }
+
+    hitDud(p) {
+      this.score += DUD_SCORE;
+      this.stats.dudsDefused++;
+      this.onCoin(DUD_COIN);
+      for (let i = 0; i < 16; i++) {
+        const a = rand(0, Math.PI * 2), sp = rand(80, 380);
+        this.particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60, r: rand(5, 12), color: "#6fcf7d", born: this.now(), dur: rand(450, 800) });
+      }
+      this.popups.push({ x: p.x, y: p.y, text: "DEFUSED! +" + DUD_SCORE, color: "#3f9b4f", size: 42, born: this.now(), dur: 900 });
+      this.popups.push({ x: p.x + 30, y: p.y + 24, text: "+$" + DUD_COIN, color: "#f0a821", size: 20, born: this.now(), dur: 650 });
+      vib([10, 30, 10]);
+      SFX.defuse();
+    }
+
+    // swiping a dud (the instinctive "get this bomb away from me" reaction) is genuinely
+    // safe — no heart, no score hit — but you also don't get the tap-to-defuse bonus
+    missDud(p) {
+      this.burstPoof(p);
+      this.popups.push({ x: p.x, y: p.y, text: "safe…", color: "#9a938a", size: 24, born: this.now(), dur: 600 });
+    }
+
     hitBomb(e, p, simT) {
       this.hearts--;
+      const heartsLost = HEARTS - this.hearts;
+      const penalty = HEART_PENALTY[heartsLost - 1] || HEART_PENALTY[HEART_PENALTY.length - 1];
+      this.score = Math.max(0, this.score - penalty);
       for (const o of this.entities) {
         if (!o.alive || o === e) continue;
         const op = this.posOf(o, simT);
@@ -343,6 +404,7 @@
       this.flashUntil = this.now() + 200;
       this.trails.forEach((tr) => { tr.count = 0; });
       this.popups.push({ x: p.x, y: p.y, text: "-1 HEART", color: "#e5254f", size: 52, born: this.now(), dur: 1000 });
+      this.popups.push({ x: p.x, y: p.y + 62, text: "-" + penalty + " SCORE", color: "#9a938a", size: 26, born: this.now(), dur: 900 });
       this.stampUntil = this.now() + 1500;   // "TIFFED OFF!" rage stamp
       vib([40, 60, 40]);
       SFX.boom(); SFX.heart();
@@ -356,7 +418,9 @@
       this.popups.push({ x: p.x, y: p.y, text: "FAKE! -" + TRAP_PENALTY, color: "#8c46c8", size: 46, born: this.now(), dur: 1100 });
       vib(20);
       SFX.trap();
-      this.onEvent({ t: "trap" });
+      // the coin steal itself happens in main.js (it needs the Deck, which Arena
+      // doesn't know about) — this just hands over where to draw its popup
+      this.onEvent({ t: "trap", x: p.x, y: p.y });
     }
 
     finalizeCombo(tr) {
@@ -455,7 +519,9 @@
             e.alive = false;
             if (e.kind === "bomb") {
               this.stats.bombsDodged++;
-            } else if (e.kind !== "trap") {
+            } else if (e.kind === "trap" || e.kind === "dud") {
+              // falling past is free — a fake only hurts if you cut it, and a dud was never dangerous
+            } else {
               this.score = Math.max(0, this.score - MISS_PENALTY);
               this.popups.push({ x: clamp(p.x, 80, W - 80), y: this.H - 120, text: "miss -" + MISS_PENALTY, color: "#9a938a", size: 30, born: nowT, dur: 700 });
               SFX.miss();
@@ -520,7 +586,13 @@
           ctx.shadowBlur = 38;
           if (Math.random() < 0.08) this.particles.push({ x: p.x + rand(-50, 50), y: p.y + rand(-50, 50), vx: rand(-20, 20), vy: rand(-70, -10), r: 4, color: "#f0a821", born: nowT, dur: 350 });
         }
-        if (e.kind === "bomb" && Math.random() < 0.25) {
+        if (e.kind === "dud") {
+          const pulse = 0.22 + 0.16 * Math.sin(nowT / 180);
+          ctx.shadowColor = "rgba(63,155,79," + pulse.toFixed(2) + ")";
+          ctx.shadowBlur = 26;
+          if (Math.random() < 0.05) this.particles.push({ x: p.x + rand(-36, 36), y: p.y + rand(-36, 36), vx: rand(-25, 25), vy: rand(-55, -5), r: 4, color: "#6fcf7d", born: nowT, dur: 380 });
+        }
+        if ((e.kind === "bomb" || e.kind === "dud") && Math.random() < 0.25) {
           this.particles.push({ x: p.x + 30, y: p.y - 44, vx: rand(-40, 40), vy: rand(-80, -10), r: 4, color: "#ffd94d", born: nowT, dur: 300 });
         }
         ctx.drawImage(gl.full, -size / 2, -size / 2, size, size);

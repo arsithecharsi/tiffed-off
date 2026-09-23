@@ -8,12 +8,12 @@
   // bomb is deliberately cheap/fast/silent: it should feel like ambient Fruit Ninja
   // danger, not a menu-driven event you can plan around.
   const WEAPONS = [
-    { id: "bomb",  icon: "bomb", n: "BOMB", cost: 20, cd: 3000,  aim: true },
-    { id: "trap",  icon: "fake", n: "FAKE", cost: 45, cd: 7000,  aim: true },
+    { id: "bomb",  icon: "bomb", n: "BOMB", cost: 20, cd: 1800,  aim: true },
+    { id: "trap",  icon: "fake", n: "FAKE", cost: 45, cd: 4500,  aim: true },
     { id: "flood", icon: "rush", n: "RUSH", cost: 50, cd: 9000,  aim: false },
     { id: "gust",  icon: "gust", n: "GUST", cost: 55, cd: 14000, aim: false },
   ];
-  const START_COINS = 40, HEART_BOUNTY = 15;
+  const START_COINS = 40, HEART_BOUNTY = 15, TRAP_STEAL_PCT = 0.20;
   const FUSE_MIN = 500, FUSE_MAX = 2000;
   const BOMB_FUSE_MIN = 250, BOMB_FUSE_MAX = 650;   // short and quiet — no time to consciously plan around it
 
@@ -391,8 +391,19 @@
           other.ui.announce("DIRECT HIT! +$" + HEART_BOUNTY, 1600);
         } else Net.send({ t: "hurt", hearts: m.hearts });
       } else if (m.t === "trap") {
-        if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " FELL FOR THE FAKE", 1800);
-        else Net.send({ t: "trapped" });
+        // the steal itself happens here (main.js owns the Deck) — Arena only told us
+        // it happened and where, so the popup lands at the right spot on the victim's board
+        const stolen = Math.round(board.deck.coins * TRAP_STEAL_PCT);
+        board.deck.coins = Math.max(0, board.deck.coins - stolen);
+        board.arena.popups.push({ x: m.x, y: m.y + 55, text: "-$" + stolen + " STOLEN", color: "#8c46c8", size: 24, born: performance.now(), dur: 1000 });
+        SFX.steal();
+        if (this.mode === "couch") {
+          const other = this.otherBoard(board);
+          other.deck.addCoins(stolen);
+          other.ui.announce(esc(board.name) + " FELL FOR THE FAKE — STOLE $" + stolen, 1800);
+        } else {
+          Net.send({ t: "trapped", stolen });
+        }
       } else if (m.t === "combo") {
         if (m.n >= 5) {
           if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " ×" + m.n + " COMBO?!", 1600);
@@ -427,7 +438,10 @@
         me.deck.addCoins(HEART_BOUNTY);
         me.ui.announce("DIRECT HIT! +$" + HEART_BOUNTY, 1600);
       }
-      else if (m.t === "trapped") me.ui.announce(esc(S.theirName) + " FELL FOR THE FAKE", 1800);
+      else if (m.t === "trapped") {
+        me.deck.addCoins(m.stolen);
+        me.ui.announce(esc(S.theirName) + " FELL FOR THE FAKE — STOLE $" + m.stolen, 1800);
+      }
       else if (m.t === "combo") me.ui.announce(esc(S.theirName) + " ×" + m.n + " COMBO?!", 1600);
       else if (m.t === "rich") me.ui.announce(esc(S.theirName) + " IS SITTING ON $100+", 1800);
       else if (m.t === "st") { this.themState.score = m.score; this.themState.hearts = m.hearts; }
@@ -506,7 +520,7 @@
       $("results-stats").innerHTML = names.map((n) => {
         const st = (this.results[n] || {}).stats;
         if (!st) return "";
-        return esc(n) + " — " + st.fruit + " fruit · " + (st.perfects || 0) + " perfect · best ×" + (st.bestCombo || 0) + " · dodged " + st.bombsDodged + " · sent " + (st.attacks || 0);
+        return esc(n) + " — " + st.fruit + " fruit · " + (st.perfects || 0) + " perfect · best ×" + (st.bestCombo || 0) + " · dodged " + st.bombsDodged + " · " + (st.dudsDefused || 0) + " defused · sent " + (st.attacks || 0);
       }).filter(Boolean).join("<br>");
       $("results-h2h").textContent = outcome.tie ? "" : this.recordWin(outcome.winner, outcome.loser);
       $("btn-rematch").disabled = false;
@@ -526,7 +540,7 @@
       $("results-title").textContent = reason === "ko" ? "KO'D!" : "RUN OVER";
       $("results-lines").innerHTML = "Score: <b>" + score + "</b>" + (isBest ? " — NEW BEST! 🎉" : " · best " + Math.max(prevBest, score));
       const st = board.arena.stats;
-      $("results-stats").innerHTML = st.fruit + " fruit · " + st.perfects + " perfect · best ×" + st.bestCombo + " · " + st.bombsDodged + " bombs dodged";
+      $("results-stats").innerHTML = st.fruit + " fruit · " + st.perfects + " perfect · best ×" + st.bestCombo + " · " + st.bombsDodged + " bombs dodged · " + st.dudsDefused + " defused";
       $("results-h2h").textContent = "";
       $("btn-rematch").disabled = false;
       $("results-status").textContent = "";
