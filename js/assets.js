@@ -64,10 +64,8 @@
   const ICONS = {
     heart: (fill) => wrap('<path d="M50 86 C20 62 11 40 24 28 C34 19 46 24 50 35 C54 24 66 19 76 28 C89 40 80 62 50 86 Z" fill="' + (fill || "#e5254f") + '"/>'),
     coin: () => wrap('<circle cx="50" cy="50" r="34" fill="#f0a821"/><circle cx="50" cy="50" r="24" fill="none" stroke-width="4"/><path d="M50 36 L50 64 M43 42 C43 38 57 38 57 44 C57 50 43 50 43 56 C43 62 57 62 57 58" fill="none" stroke-width="4"/>'),
-    shield: () => wrap('<path d="M50 8 L83 21 C83 52 72 77 50 92 C28 77 17 52 17 21 Z" fill="#3f9b4f"/><path d="M50 20 L70 28 C70 50 63 66 50 77 Z" fill="#5cb96c" stroke="none"/>'),
-    smoke: () => wrap('<circle cx="34" cy="62" r="18" fill="#b7afa4"/><circle cx="56" cy="48" r="22" fill="#c9c2b8"/><circle cx="72" cy="66" r="15" fill="#b7afa4"/>'),
+    gust: () => wrap('<path d="M14 38 L58 38 C70 38 70 26 60 26 C52 26 50 33 50 33" fill="none"/><path d="M10 56 L74 56 C88 56 88 42 76 42 C66 42 64 50 64 50" fill="none"/><path d="M18 74 L64 74 C74 74 74 64 65 64" fill="none"/>'),
     rush: () => wrap('<path d="M52 14 C60 26 70 32 78 34 M52 14 C46 26 40 34 30 40" fill="none"/><circle cx="30" cy="56" r="16" fill="#e5254f"/><circle cx="66" cy="62" r="18" fill="#c81e42"/>'),
-    eco: () => wrap('<path d="M22 78 L42 54 L56 66 L80 32" fill="none" stroke-width="7"/><path d="M62 30 L82 28 L80 48" fill="none" stroke-width="7"/>'),
     fake: () => wrap('<path d="M50 92 C31 79 17 59 21 41 C24 27 39 22 50 28 C61 22 76 27 79 41 C83 59 69 79 50 92 Z" fill="#e5254f"/><path d="M31 33 L38 18 L46 30 L53 15 L61 30 L69 19 L73 33 C65 40 35 40 31 33 Z" fill="#3f9b4f"/><path d="M38 56 L62 72 M62 56 L38 72" stroke="#8c46c8" stroke-width="6" fill="none"/>'),
     spark: () => wrap('<path d="M50 10 L58 40 L88 50 L58 60 L50 90 L42 60 L12 50 L42 40 Z" fill="#f0a821"/><circle cx="50" cy="50" r="9" fill="#e5254f" stroke="none"/>'),
     skull: () => wrap('<path d="M50 14 C26 14 18 32 20 50 C21 60 26 64 30 68 L30 82 L40 78 L44 86 L56 86 L60 78 L70 82 L70 68 C74 64 79 60 80 50 C82 32 74 14 50 14 Z" fill="#f3ead8"/><circle cx="38" cy="46" r="7" fill="' + INK + '" stroke="none"/><circle cx="62" cy="46" r="7" fill="' + INK + '" stroke="none"/><path d="M50 56 L46 64 L54 64 Z" fill="' + INK + '" stroke="none"/>'),

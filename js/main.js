@@ -4,23 +4,25 @@
   const { Arena, ROUND_MS, HEARTS } = Game;
 
   /* ---------- weapons ---------- */
+  // every weapon is offensive now — defense is dodging skill, not a purchase.
+  // bomb is deliberately cheap/fast/silent: it should feel like ambient Fruit Ninja
+  // danger, not a menu-driven event you can plan around.
   const WEAPONS = [
-    { id: "bomb",   icon: "bomb",   n: "BOMB",   cost: 30, cd: 2500,  aim: true },
-    { id: "trap",   icon: "fake",   n: "FAKE",   cost: 45, cd: 6000,  aim: true },
-    { id: "flood",  icon: "rush",   n: "RUSH",   cost: 50, cd: 8000,  aim: false },
-    { id: "smoke",  icon: "smoke",  n: "SMOKE",  cost: 35, cd: 10000, aim: false },
-    { id: "shield", icon: "shield", n: "SHIELD", cost: 45, cd: 8000,  aim: false },
-    { id: "eco",    icon: "eco",    n: "ECO",    cost: 70, cd: 8000,  aim: false, max: 3 },
+    { id: "bomb",  icon: "bomb", n: "BOMB", cost: 20, cd: 3000,  aim: true },
+    { id: "trap",  icon: "fake", n: "FAKE", cost: 45, cd: 7000,  aim: true },
+    { id: "flood", icon: "rush", n: "RUSH", cost: 50, cd: 9000,  aim: false },
+    { id: "gust",  icon: "gust", n: "GUST", cost: 55, cd: 14000, aim: false },
   ];
   const START_COINS = 40, HEART_BOUNTY = 15;
   const FUSE_MIN = 500, FUSE_MAX = 2000;
+  const BOMB_FUSE_MIN = 250, BOMB_FUSE_MAX = 650;   // short and quiet — no time to consciously plan around it
 
   const ANNOUNCE = {
-    bomb:  (n) => n + " SENT TROUBLE",
     trap:  (n) => n + " SENT A GIFT…",
     flood: (n) => n + " HIT RUSH",
-    smoke: (n) => n + " GOT PETTY",
+    gust:  (n) => n + " KICKED UP A GUST — 10s OF STUFF FLYING IN FROM EVERY SIDE",
   };
+  const SILENT_ATTACKS = { bomb: true };  // no banner — should feel like ordinary bad luck, not a telegraphed event
   const KO_LINES = [
     (w, l) => l + " GOT COOKED BY " + w,
     (w, l) => w + " BLEW " + l + " SKY HIGH",
@@ -80,18 +82,20 @@
      BoardUI — DOM for one player's board (HUD, arena, fuse lane, deck)
      ================================================================ */
   class BoardUI {
-    constructor(opts) {  // {rot, solo}
+    constructor(opts) {  // {rot, solo, noDeck, onEndRun}
       this.rot = !!opts.rot;
       const root = document.createElement("div");
       root.className = "board" + (this.rot ? " rot" : "") + (opts.solo ? " solo" : "");
-      root.innerHTML =
-        '<div class="bhud"><span class="me"></span><span class="tick">90s</span><span class="them"></span></div>' +
-        '<div class="timerbar"><div class="timerbar-fill"></div></div>' +
-        '<div class="arena-wrap"><canvas></canvas><div class="board-announce hidden"></div><div class="countdown hidden"></div></div>' +
+      const deckHtml = opts.noDeck ? "" :
         '<div class="deck">' +
           '<div class="lane"><span class="spark">' + Assets.icon("spark", 22) + '</span><span class="lane-label">INCOMING</span><span class="coinchip">$0</span></div>' +
           '<div class="weapon-row"></div>' +
         '</div>';
+      root.innerHTML =
+        '<div class="bhud"><span class="me"></span><span class="tick">90s</span><span class="them"></span></div>' +
+        '<div class="timerbar"><div class="timerbar-fill"></div></div>' +
+        '<div class="arena-wrap"><canvas></canvas><div class="board-announce hidden"></div><div class="countdown hidden"></div></div>' +
+        deckHtml;
       $("boards").appendChild(root);
       this.root = root;
       this.hudMe = root.querySelector(".me");
@@ -105,7 +109,21 @@
       this.coinchip = root.querySelector(".coinchip");
       this.laneLabel = root.querySelector(".lane-label");
       this.weaponRow = root.querySelector(".weapon-row");
-      this._announceT = 0;
+      this._announceT = 0; this._burstT = 0;
+      if (opts.onEndRun) {
+        this.hudThem.innerHTML = '<button class="endrun-btn">END RUN</button>';
+        this.hudThem.querySelector(".endrun-btn").onclick = opts.onEndRun;
+      }
+    }
+    setElapsed(ms) {
+      this.hudTick.textContent = Math.floor(ms / 1000) + "s";
+      this.timerFill.style.width = Math.min(100, ms / 900).toFixed(1) + "%";
+    }
+    showBurst(mult, ms) {
+      this.coinchip.classList.add("burst");
+      this.coinchip.dataset.burst = "×" + (Math.round(mult * 10) / 10);
+      clearTimeout(this._burstT);
+      this._burstT = setTimeout(() => this.coinchip.classList.remove("burst"), ms);
     }
     setMe(name, h, score) { this.hudMe.innerHTML = esc(name) + " " + heartsHtml(h) + ' <span class="sc">' + score + "</span>"; }
     setThem(name, h, score) { this.hudThem.innerHTML = '<span class="sc">' + score + "</span> " + heartsHtml(h) + " " + esc(name); }
@@ -152,10 +170,9 @@
       this.onLaunch = opts.onLaunch;
       this.onRich = opts.onRich || (() => {});
       this.coins = START_COINS;
-      this.eco = 0;
       this.comeback = false;
+      this.burstMult = 1; this.burstUntil = 0;   // temporary income boost from landing combos
       this.cds = {};
-      this.shieldArmed = false;
       this.running = false;
       this.attacksSent = 0;
       this.richSent = false;
@@ -173,7 +190,21 @@
       this.refresh();
     }
 
-    rate() { return 1 + this.eco * 1.5 + (this.comeback ? 2 : 0); }
+    rate() {
+      const base = 1.5 + (this.comeback ? 2 : 0);
+      return base * (performance.now() < this.burstUntil ? this.burstMult : 1);
+    }
+
+    // a landed combo (3+) buys a temporary income multiplier instead of a permanent
+    // purchased upgrade — good slicing directly fuels your next attack
+    triggerBurst(n) {
+      const mult = Math.min(3, 1 + (n - 2) * 0.5);
+      const dur = Math.min(5000, 2200 + (n - 3) * 500);
+      const now = performance.now();
+      this.burstMult = Math.max(this.burstUntil > now ? this.burstMult : 1, mult);
+      this.burstUntil = Math.max(this.burstUntil, now + dur);
+      this.ui.showBurst(this.burstMult, this.burstUntil - now);
+    }
 
     bindButton(b, w) {
       let start = null;
@@ -206,23 +237,12 @@
       if (!this.running) return;
       const now = performance.now();
       if ((this.cds[w.id] || 0) > now) { SFX.deny(); return; }
-      if (w.id === "shield" && this.shieldArmed) { SFX.deny(); return; }
-      if (w.id === "eco" && this.eco >= w.max) { SFX.deny(); return; }
       if (this.coins < w.cost) { SFX.deny(); this.ui.announce('<span class="warn">NOT ENOUGH CASH</span>', 900); return; }
       this.coins -= w.cost;
       this.cds[w.id] = now + w.cd;
-      if (w.id === "shield") {
-        this.shieldArmed = true;
-        SFX.coin();
-      } else if (w.id === "eco") {
-        this.eco++;
-        SFX.coin();
-        this.ui.announce("ECO " + this.eco + "/3 — $" + this.rate().toFixed(1) + "/s", 1400);
-      } else {
-        this.attacksSent++;
-        SFX.send();
-        this.onLaunch(w.id, dxClient);
-      }
+      this.attacksSent++;
+      SFX.send();
+      this.onLaunch(w.id, dxClient);
       this.refresh();
     }
 
@@ -242,11 +262,8 @@
       WEAPONS.forEach((w) => {
         const b = this.btns[w.id];
         const cdLeft = Math.max(0, (this.cds[w.id] || 0) - now);
-        const maxed = (w.id === "shield" && this.shieldArmed) || (w.id === "eco" && this.eco >= w.max);
-        b.classList.toggle("cant", maxed || this.coins < w.cost || cdLeft > 0);
-        b.classList.toggle("armed", w.id === "shield" && this.shieldArmed);
+        b.classList.toggle("cant", this.coins < w.cost || cdLeft > 0);
         b.querySelector(".cdover").style.height = cdLeft > 0 ? (cdLeft / w.cd * 100).toFixed(0) + "%" : "0";
-        if (w.id === "eco") b.querySelector(".wn").textContent = "ECO " + this.eco + "/3";
       });
     }
   }
@@ -267,12 +284,17 @@
       if (mode === "couch") {
         this.boards.push(this.makeBoard({ name: S.p2Name, rot: true }));
         this.boards.push(this.makeBoard({ name: S.myName, rot: false }));
+      } else if (mode === "solo") {
+        this.boards.push(this.makeBoard({
+          name: S.myName, solo: true, noDeck: true, endless: true,
+          onEndRun: () => { const b = this.boards[0]; if (!this.over && b.arena.running) b.arena.endRound("stopped"); },
+        }));
       } else {
         this.boards.push(this.makeBoard({ name: S.myName, solo: true }));
       }
       // the first board is measured before the second reflows the column — re-measure both
       requestAnimationFrame(() => this.boards.forEach((b) => b.arena.resize()));
-      this._qiv = setInterval(() => this.tickQueues(), 100);
+      if (mode !== "solo") this._qiv = setInterval(() => this.tickQueues(), 100);
       if (mode === "online") {
         this._stiv = setInterval(() => {
           const b = this.boards[0];
@@ -280,7 +302,7 @@
           // comeback aid when clearly behind
           b.deck.comeback = this.themState.score - b.arena.score > 120 || this.themState.hearts - b.arena.hearts >= 2;
         }, 500);
-      } else {
+      } else if (mode === "couch") {
         this._stiv = setInterval(() => {
           const [a, b] = this.boards;
           a.deck.comeback = b.arena.score - a.arena.score > 120 || b.arena.hearts - a.arena.hearts >= 2;
@@ -295,17 +317,21 @@
       const board = { ui, name: opts.name, queue: [], timeouts: new Set() };
       board.arena = new Arena(ui.canvas, {
         rotated: opts.rot,
-        onCoin: (n) => { board.deck.addCoins(n); },
+        endless: opts.endless,
+        onCoin: (n) => { if (board.deck) board.deck.addCoins(n); },
+        onBurst: (n) => { if (board.deck) board.deck.triggerBurst(n); },
         onEvent: (m) => this.onArenaEvent(board, m),
         onState: (st) => this.onArenaState(board, st),
       });
-      board.deck = new Deck(ui, {
-        onLaunch: (w, dxClient) => this.launch(board, w, dxClient),
-        onRich: () => {
-          if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " IS SITTING ON $100+", 1800);
-          else Net.send({ t: "rich" });
-        },
-      });
+      if (!opts.noDeck) {
+        board.deck = new Deck(ui, {
+          onLaunch: (w, dxClient) => this.launch(board, w, dxClient),
+          onRich: () => {
+            if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " IS SITTING ON $100+", 1800);
+            else Net.send({ t: "rich" });
+          },
+        });
+      }
       return board;
     }
 
@@ -321,23 +347,17 @@
 
     launch(board, w, dxClient) {
       const aimX = this.aimFrom(board, dxClient);
-      const delay = Math.round(rand(FUSE_MIN, FUSE_MAX));
+      const [fMin, fMax] = w === "bomb" ? [BOMB_FUSE_MIN, BOMB_FUSE_MAX] : [FUSE_MIN, FUSE_MAX];
+      const delay = Math.round(rand(fMin, fMax));
       if (this.mode === "couch") this.deliver(this.otherBoard(board), board.name, w, aimX, delay);
       else Net.send({ t: "atk", w, aimX, delay });
     }
 
     deliver(victim, fromName, w, aimX, delay) {
       if (this.over) return;
-      if (victim.deck.shieldArmed) {
-        victim.deck.shieldArmed = false;
-        victim.deck.refresh();
-        victim.ui.announce("BLOCKED! NICE.", 1500);
-        SFX.coin();
-        if (this.mode === "couch") this.boards.find((b) => b.name === fromName).ui.announce(esc(victim.name) + " BLOCKED IT", 1500);
-        else Net.send({ t: "blocked" });
-        return;
+      if (!SILENT_ATTACKS[w]) {
+        victim.ui.announce('<span class="warn">INCOMING!</span> ' + ANNOUNCE[w](esc(fromName)));
       }
-      victim.ui.announce('<span class="warn">INCOMING!</span> ' + ANNOUNCE[w](esc(fromName)));
       const q = { w, at: performance.now() + delay, total: delay };
       victim.queue.push(q);
       victim.ui.addFuseItem(q);
@@ -360,6 +380,10 @@
 
     /* ----- arena events ----- */
     onArenaEvent(board, m) {
+      if (this.mode === "solo") {
+        if (m.t === "end") this.finishSolo(board, m.score, m.reason);
+        return;   // no opponent to notify of hurts/traps/combos in free play
+      }
       if (m.t === "hurt") {
         if (this.mode === "couch") {
           const other = this.otherBoard(board);
@@ -384,6 +408,7 @@
 
     onArenaState(board, st) {
       board.ui.setMe(board.name, st.hearts, st.score);
+      if (this.mode === "solo") { board.ui.setElapsed(st.elapsed); return; }
       board.ui.setTimer(st.left, st.dur);
       if (this.mode === "couch") {
         const other = this.otherBoard(board);
@@ -397,7 +422,6 @@
     onNet(m) {
       const me = this.boards[0];
       if (m.t === "atk") this.deliver(me, S.theirName, m.w, m.aimX, m.delay);
-      else if (m.t === "blocked") me.ui.announce(esc(S.theirName) + " BLOCKED IT", 1500);
       else if (m.t === "hurt") {
         this.themState.hearts = m.hearts;
         me.deck.addCoins(HEART_BOUNTY);
@@ -415,15 +439,18 @@
 
     /* ----- start & finish ----- */
     countdownThenStart() {
-      const vs = this.mode === "couch" ? [S.myName, S.p2Name] : [S.myName, S.theirName];
-      this.boards.forEach((b) => b.ui.announce(esc(vs[0].toUpperCase()) + " ⚔ " + esc(vs[1].toUpperCase()), 2600));
+      if (this.mode === "solo") this.boards[0].ui.announce("FREE PLAY — GO!", 1800);
+      else {
+        const vs = this.mode === "couch" ? [S.myName, S.p2Name] : [S.myName, S.theirName];
+        this.boards.forEach((b) => b.ui.announce(esc(vs[0].toUpperCase()) + " ⚔ " + esc(vs[1].toUpperCase()), 2600));
+      }
       const step = (k) => {
         if (this.over) return;
         if (k === 0) {
           this.boards.forEach((b) => b.ui.countdown("SLICE!"));
           SFX.combo(4);
           setTimeout(() => this.boards.forEach((b) => b.ui.countdown(null)), 500);
-          this.boards.forEach((b) => { b.arena.resize(); b.arena.startRound(ROUND_MS); b.deck.start(); });
+          this.boards.forEach((b) => { b.arena.resize(); b.arena.startRound(ROUND_MS); if (b.deck) b.deck.start(); });
           return;
         }
         this.boards.forEach((b) => b.ui.countdown(k));
@@ -479,7 +506,7 @@
       $("results-stats").innerHTML = names.map((n) => {
         const st = (this.results[n] || {}).stats;
         if (!st) return "";
-        return esc(n) + " — " + st.fruit + " fruit · best ×" + (st.bestCombo || 0) + " · dodged " + st.bombsDodged + " · sent " + (st.attacks || 0);
+        return esc(n) + " — " + st.fruit + " fruit · " + (st.perfects || 0) + " perfect · best ×" + (st.bestCombo || 0) + " · dodged " + st.bombsDodged + " · sent " + (st.attacks || 0);
       }).filter(Boolean).join("<br>");
       $("results-h2h").textContent = outcome.tie ? "" : this.recordWin(outcome.winner, outcome.loser);
       $("btn-rematch").disabled = false;
@@ -487,6 +514,23 @@
       S.myReady = S.theirReady = false;
       const iWon = outcome.winner === S.myName;
       if (this.mode === "couch" || iWon) SFX.fanfare(); else if (!outcome.tie) SFX.sad();
+      show("screen-results");
+    }
+
+    finishSolo(board, score, reason) {
+      this.over = true;
+      this.stop();
+      const prevBest = parseInt(Store.get("ss_solo_best") || "0", 10);
+      const isBest = score > prevBest;
+      if (isBest) Store.set("ss_solo_best", String(score));
+      $("results-title").textContent = reason === "ko" ? "KO'D!" : "RUN OVER";
+      $("results-lines").innerHTML = "Score: <b>" + score + "</b>" + (isBest ? " — NEW BEST! 🎉" : " · best " + Math.max(prevBest, score));
+      const st = board.arena.stats;
+      $("results-stats").innerHTML = st.fruit + " fruit · " + st.perfects + " perfect · best ×" + st.bestCombo + " · " + st.bombsDodged + " bombs dodged";
+      $("results-h2h").textContent = "";
+      $("btn-rematch").disabled = false;
+      $("results-status").textContent = "";
+      if (isBest) SFX.fanfare(); else SFX.tick();
       show("screen-results");
     }
 
@@ -507,7 +551,7 @@
       clearInterval(this._qiv); clearInterval(this._stiv);
       this.boards.forEach((b) => {
         b.arena.stopRound(); b.arena.destroy();
-        b.deck.stop();
+        if (b.deck) b.deck.stop();
         b.timeouts.forEach(clearTimeout);
       });
     }
@@ -529,6 +573,11 @@
     show("screen-online");
   };
   $("btn-couch").onclick = () => { Store.set("ss_name", myName()); show("screen-couch"); };
+  $("btn-solo").onclick = () => {
+    S.mode = "solo"; S.isHost = true; S.myName = myName();
+    Store.set("ss_name", S.myName);
+    startMatch();
+  };
   $("btn-online-back").onclick = () => { Net.close(); show("screen-mode"); };
   $("btn-couch-back").onclick = () => show("screen-mode");
 
@@ -545,7 +594,7 @@
     Net.on("lobbyok", () => { if (!S.isHost && !(S.match && !S.match.over)) enterLobby(); });
     Net.on("start", () => startMatch());
     Net.on("ready", () => { S.theirReady = true; maybeRematch(); });
-    ["atk", "blocked", "hurt", "trapped", "combo", "rich", "st", "end"].forEach((t) =>
+    ["atk", "hurt", "trapped", "combo", "rich", "st", "end"].forEach((t) =>
       Net.on(t, (m) => { if (S.match) S.match.onNet(m); })
     );
     Net.onClose = () => {
@@ -639,7 +688,7 @@
   $("btn-rematch").onclick = () => {
     S.myReady = true;
     $("btn-rematch").disabled = true;
-    if (S.mode === "couch") { startMatch(); return; }
+    if (S.mode === "couch" || S.mode === "solo") { startMatch(); return; }
     Net.send({ t: "ready" });
     $("results-status").textContent = S.theirReady ? "" : "Waiting for partner…";
     maybeRematch();

@@ -7,14 +7,21 @@
 (function () {
   const W = 1000, G = 1450;                      // world width units, gravity px/s^2
   const ROUND_MS = 90000;
+  const ESCALATE_MS = 90000;                      // endless/solo boards ramp on this fixed clock, then hold
   const HEARTS = 3;
   const SLICE_SPEED = 0.55;                      // min world px/ms to cut
-  const FRUIT_SCORE = 5, FRUIT_COIN = 3;
-  const CRIT_SCORE = 10, CRIT_COIN = 4, CRIT_CHANCE = 0.12;
+  const FRUIT_SCORE = 5, FRUIT_COIN = 4;
+  const CRIT_SCORE = 10, CRIT_COIN = 7, CRIT_CHANCE = 0.12;
+  const APEX_PERFECT_VY = 150, APEX_PERFECT_MULT = 1.8;   // timing near the top of the arc, not spam, scores big
+  const APEX_GREAT_VY = 380, APEX_GREAT_MULT = 1.3;
   const COMBO_BONUS = { 3: 15, 4: 25 };          // 5+ => 40 (score)
-  const COMBO_COIN = { 3: 5, 4: 8 };             // 5+ => 15 (coins — combos fund attacks)
+  // tuned so a combo pays for the weapon it should feel like it "buys": a bare ×3
+  // (3 fruit @ 4 coin + this bonus) lands near $20, exactly the cheapest attack
+  const COMBO_COIN = { 3: 8, 4: 14 };            // 5+ => 25 (coins — combos fund attacks)
   const MISS_PENALTY = 5, TRAP_PENALTY = 30;
   const BOMB_BLAST = 260;
+  const NATURAL_BOMB_CHANCE = [0.02, 0.16];      // [early, late] — ambient Fruit-Ninja-style risk, independent of attacks
+  const GUST_CHAOS_MS = 10000;                    // fruit/bombs can enter from any edge for this long — apexes get hard to read
 
   const FRUITS = [
     { k: "apple",  spr: "apple",  juice: "#e5254f", r: 66 },
@@ -59,23 +66,24 @@
       this.canvas = canvas;
       this.ctx = canvas.getContext("2d");
       this.rotated = !!opts.rotated;          // couch: top board is CSS-rotated 180°
+      this.endless = !!opts.endless;          // solo/free-play: no timer, ramps then holds at max intensity
       this.onEvent = opts.onEvent || (() => {});   // {t:'hurt'|'trap'|'end', ...}
       this.onState = opts.onState || (() => {});
       this.onCoin = opts.onCoin || (() => {});     // coins earned by slicing
+      this.onBurst = opts.onBurst || (() => {});   // combo landed — economy burst
 
       this.entities = [];  // {id,kind,crit,x0,y0,vx,vy,r0,vr,t0,alive}
       this.pieces = [];
       this.particles = [];
       this.popups = [];
-      this.smokes = [];
       this.trails = new Map(); // pointerId -> {pts:[], count, lastSlice, swished}
       this.score = 0; this.hearts = HEARTS;
-      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0 };
+      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0 };
       this.running = false;
       this.roundStart = 0; this.roundDur = ROUND_MS;
       this.nextNatural = 0; this.nextBurst = 0;
       this.nextId = 1;
-      this.shakeUntil = 0; this.flashUntil = 0; this.stampUntil = 0;
+      this.shakeUntil = 0; this.flashUntil = 0; this.stampUntil = 0; this.windUntil = 0;
       this.lastState = 0;
       this._raf = 0;
       this._resize = this.resize.bind(this);
@@ -120,9 +128,10 @@
     /* ---------- round control ---------- */
     startRound(dur) {
       this.entities = []; this.pieces = []; this.particles = [];
-      this.popups = []; this.smokes = [];
+      this.popups = [];
       this.score = 0; this.hearts = HEARTS;
-      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0 };
+      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0 };
+      this.windUntil = 0;
       this.roundDur = dur || ROUND_MS;
       this.roundStart = this.now();
       this.nextNatural = 600;
@@ -155,11 +164,44 @@
       return e;
     }
 
-    spawnNaturalFruit() {
-      const f = FRUITS[(Math.random() * FRUITS.length) | 0];
+    spawnNatural(prog) {
+      // ambient Fruit-Ninja-style risk: a fraction of "normal" spawns are just bombs,
+      // independent of anything either player bought — rate climbs with the match arc.
+      const isBomb = Math.random() < lerp(NATURAL_BOMB_CHANCE[0], NATURAL_BOMB_CHANCE[1], prog);
+      const kind = isBomb ? "bomb" : FRUITS[(Math.random() * FRUITS.length) | 0].k;
+      const crit = !isBomb && Math.random() < CRIT_CHANCE;
+      if (this.windUntil && this.simT() < this.windUntil) { this.spawnChaos(kind, crit); return; }
       const x0 = rand(120, W - 120);
       const vx = (W / 2 - x0) * rand(0.08, 0.22) + rand(-60, 60);
-      this.spawn(f.k, x0, vx, rand(0.1, 0.36), 0, Math.random() < CRIT_CHANCE);
+      this.spawn(kind, x0, vx, rand(0.1, 0.36), 0, crit);
+    }
+
+    // during a gust window, entries come from any of the 4 edges instead of always
+    // rising from the bottom — some (top-drops) have no apex to time at all, others
+    // (side-arcs) have one but it reads nothing like the familiar bottom-up parabola
+    spawnChaos(kind, crit) {
+      const edge = (Math.random() * 4) | 0;
+      if (edge === 0) {
+        const x0 = rand(120, W - 120);
+        const vx = (W / 2 - x0) * rand(0.08, 0.22) + rand(-60, 60);
+        this.spawn(kind, x0, vx, rand(0.1, 0.36), 0, crit);
+        return;
+      }
+      const e = {
+        id: this.nextId++, kind, crit: !!crit,
+        r0: rand(-0.6, 0.6), vr: rand(-2.2, 2.2), t0: this.simT(), alive: true,
+      };
+      if (edge === 1) {              // top: already falling on entry — pure reflex, no apex to chase
+        e.x0 = rand(140, W - 140); e.y0 = -70;
+        e.vx = rand(-90, 90); e.vy = rand(260, 520);
+      } else if (edge === 2) {       // left: fast sideways arc
+        e.x0 = -70; e.y0 = rand(0.15, 0.75) * this.H;
+        e.vx = rand(520, 780); e.vy = -rand(260, 520);
+      } else {                       // right: fast sideways arc
+        e.x0 = W + 70; e.y0 = rand(0.15, 0.75) * this.H;
+        e.vx = -rand(520, 780); e.vy = -rand(260, 520);
+      }
+      this.entities.push(e);
     }
 
     handleSend(w, aimX) {
@@ -167,34 +209,21 @@
       if (!this.running) return;
       const ax = clamp(aimX || rand(150, W - 150), 80, W - 80);
       if (w === "bomb") {
-        this.spawn("bomb", ax + rand(-40, 40), rand(-50, 50), rand(0.12, 0.3));
+        // scattered and staggered, not one dramatic launch — reads like ambient bad luck,
+        // so dodging it is the same spatial-awareness skill as everything else, not a queue-watching game
+        const n = 2 + (Math.random() < 0.4 ? 1 : 0);
+        for (let i = 0; i < n; i++) this.spawn("bomb", ax + rand(-220, 220), rand(-60, 60), rand(0.1, 0.34), rand(0, 550));
       } else if (w === "trap") {
         this.spawn("trap", ax + rand(-30, 30), rand(-40, 40), rand(0.12, 0.32));
-      } else if (w === "cluster") {
-        for (let i = 0; i < 3; i++) this.spawn("bomb", ax + rand(-150, 150), rand(-70, 70), rand(0.12, 0.3), i * 160);
-        for (let i = 0; i < 3; i++) {
-          const f = FRUITS[(Math.random() * FRUITS.length) | 0];
-          this.spawn(f.k, ax + rand(-170, 170), rand(-70, 70), rand(0.12, 0.32), 80 + i * 160);
-        }
       } else if (w === "flood") {
         for (let i = 0; i < 6; i++) {
           const f = FRUITS[(Math.random() * FRUITS.length) | 0];
           this.spawn(f.k, rand(100, W - 100), rand(-90, 90), rand(0.1, 0.36), i * 130); // flood fruit never crit
         }
-      } else if (w === "smoke") {
-        this.applySmoke();
-        SFX.smoke();
-      }
-    }
-
-    applySmoke() {
-      // heavy but not blinding — silhouettes stay barely trackable through it
-      const cx = rand(250, W - 250);
-      for (let i = 0; i < 7; i++) {
-        this.smokes.push({
-          x: cx + rand(-280, 280), y: rand(0.12, 0.62) * this.H, r: rand(160, 240),
-          vx: rand(-14, 14), vy: rand(-8, 8), born: this.now(), dur: 3800,
-        });
+      } else if (w === "gust") {
+        this.windUntil = this.simT() + GUST_CHAOS_MS;
+        vib([15, 40, 15, 40, 15]);
+        SFX.gust();
       }
     }
 
@@ -264,20 +293,29 @@
           if (e.kind === "bomb") { this.hitBomb(e, p, simT); return; }
           if (e.kind === "trap") { this.hitTrap(e, p); continue; }
           this.burstSlice(e, p, def, angle);
-          const pts = e.crit ? CRIT_SCORE : FRUIT_SCORE;
+          // score rewards timing, not just contact: slice near the apex (low vertical speed)
+          // for a big bonus, so nonstop spam-swiping stops being the optimal strategy
+          const dt = (simT - e.t0) / 1000;
+          const vyNow = Math.abs(e.vy + G * dt);
+          let tier = null, mult = 1;
+          if (vyNow < APEX_PERFECT_VY) { tier = "PERFECT"; mult = APEX_PERFECT_MULT; this.stats.perfects++; }
+          else if (vyNow < APEX_GREAT_VY) { tier = "GREAT"; mult = APEX_GREAT_MULT; }
+          const base = e.crit ? CRIT_SCORE : FRUIT_SCORE;
+          const pts = Math.round(base * mult);
           const coin = (e.crit ? CRIT_COIN : FRUIT_COIN) + (e.kind === "straw" ? 1 : 0); // her fruit pays extra
           this.score += pts;
           this.stats.fruit++;
           this.onCoin(coin);
-          this.popups.push({
-            x: p.x, y: p.y,
-            text: (e.crit ? "CRIT +" : "+") + pts, color: e.crit ? "#f0a821" : "#2a2624",
-            size: e.crit ? 48 : 38, born: this.now(), dur: 700,
-          });
+          const label = (tier ? tier + " " : "") + (e.crit ? "CRIT " : "") + "+" + pts;
+          const color = tier === "PERFECT" ? "#3f9b4f" : (e.crit ? "#f0a821" : "#2a2624");
+          const size = tier === "PERFECT" ? 50 : (e.crit ? 46 : 36);
+          this.popups.push({ x: p.x, y: p.y, text: label, color, size, born: this.now(), dur: 750 });
+          this.popups.push({ x: p.x + 30, y: p.y + 24, text: "+$" + coin, color: "#f0a821", size: 20, born: this.now(), dur: 650 });
           tr.count++; tr.lastSlice = this.now();
-          vib(8);
+          vib(tier === "PERFECT" ? 14 : 8);
           if (e.kind === "straw") SFX.straw(); else SFX.splat();
-          if (e.crit) SFX.coin();
+          if (tier === "PERFECT") SFX.perfect();
+          else if (e.crit) SFX.coin();
         }
       }
     }
@@ -327,6 +365,7 @@
         const coins = COMBO_COIN[tr.count] || 15;   // combos bankroll your next attack
         this.score += bonus;
         this.onCoin(coins);
+        this.onBurst(tr.count);
         this.stats.bestCombo = Math.max(this.stats.bestCombo, tr.count);
         this.popups.push({ x: W / 2, y: this.H * 0.3, text: "×" + tr.count + " COMBO  +" + bonus, color: "#e5254f", size: 52, born: this.now(), dur: 1100 });
         this.popups.push({ x: W / 2, y: this.H * 0.3 + 90, text: "+$" + coins, color: "#f0a821", size: 40, born: this.now(), dur: 1100 });
@@ -383,16 +422,28 @@
       const simT = this.simT();
 
       if (this.running) {
-        // escalation arc: clean slicing early, chaos late
-        const prog = clamp(simT / this.roundDur, 0, 1);
+        // escalation arc: clean slicing early, chaos late (endless boards ramp on a fixed
+        // clock instead of their — effectively infinite — round duration, then hold at max)
+        const prog = clamp(simT / (this.endless ? ESCALATE_MS : this.roundDur), 0, 1);
         if (simT >= this.nextNatural) {
-          this.spawnNaturalFruit();
-          if (Math.random() < lerp(0.05, 0.4, prog)) this.spawnNaturalFruit();
+          this.spawnNatural(prog);
+          if (Math.random() < lerp(0.05, 0.4, prog)) this.spawnNatural(prog);
           this.nextNatural = simT + rand(1, 1.45) * lerp(1500, 750, prog);
         }
         if (simT >= this.nextBurst) {
-          for (let i = 0; i < 3; i++) setTimeout(() => this.running && this.spawnNaturalFruit(), i * 150);
+          for (let i = 0; i < 3; i++) setTimeout(() => this.running && this.spawnNatural(prog), i * 150);
           this.nextBurst = simT + rand(1, 1.4) * lerp(11000, 5500, prog);
+        }
+        // gust window: a steady trickle of streaks entering from all 4 edges, so the
+        // "stuff can come from anywhere right now" state reads clearly the whole time
+        if (this.windUntil && simT < this.windUntil && Math.random() < 0.35) {
+          const edge = (Math.random() * 4) | 0;
+          let x, y, dx, dy;
+          if (edge === 0) { x = rand(0, W); y = this.H + 20; dx = rand(-0.3, 0.3); dy = -1; }
+          else if (edge === 1) { x = rand(0, W); y = -20; dx = rand(-0.3, 0.3); dy = 1; }
+          else if (edge === 2) { x = -20; y = rand(0, this.H); dx = 1; dy = rand(-0.3, 0.3); }
+          else { x = W + 20; y = rand(0, this.H); dx = -1; dy = rand(-0.3, 0.3); }
+          this.particles.push({ streak: true, x, y, dx, dy, speed: rand(500, 850), len: rand(40, 90), color: "rgba(95,135,168,.5)", born: nowT, dur: rand(500, 900) });
         }
         this.trails.forEach((tr) => {
           if (tr.count >= 3 && nowT - tr.lastSlice > 350) this.finalizeCombo(tr);
@@ -411,7 +462,7 @@
             }
           }
         }
-        if (simT >= this.roundDur) this.endRound("time");
+        if (!this.endless && simT >= this.roundDur) this.endRound("time");
       }
 
       if (this.entities.length > 90) this.entities = this.entities.filter((e) => e.alive || nowT - e.t0 < 30000);
@@ -420,7 +471,7 @@
 
       if (nowT - this.lastState > 150) {
         this.lastState = nowT;
-        this.onState({ score: this.score, hearts: this.hearts, left: Math.max(0, this.roundDur - simT), dur: this.roundDur, running: this.running });
+        this.onState({ score: this.score, hearts: this.hearts, left: Math.max(0, this.roundDur - simT), dur: this.roundDur, elapsed: simT, running: this.running });
       }
     }
 
@@ -498,6 +549,13 @@
         if (pt.ring) {
           ctx.strokeStyle = pt.color; ctx.lineWidth = 10 * life;
           ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r + age * 1400, 0, Math.PI * 2); ctx.stroke();
+        } else if (pt.streak) {
+          const x = pt.x + pt.dx * pt.speed * age, y = pt.y + pt.dy * pt.speed * age;
+          ctx.strokeStyle = pt.color; ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - pt.dx * pt.len, y - pt.dy * pt.len);
+          ctx.stroke();
         } else {
           const x = pt.x + pt.vx * age, y = pt.y + pt.vy * age + 0.5 * 900 * age * age;
           ctx.fillStyle = pt.color;
@@ -551,22 +609,14 @@
       }
       this.popups = this.popups.filter((pp) => nowT - pp.born < pp.dur);
 
-      // smoke
-      for (const s of this.smokes) {
-        const age = nowT - s.born;
-        if (age > s.dur) continue;
-        let a;
-        if (age < 400) a = age / 400;
-        else if (age > s.dur - 900) a = (s.dur - age) / 900;
-        else a = 1;
-        const x = s.x + s.vx * (age / 1000), y = s.y + s.vy * (age / 1000);
-        const rg = ctx.createRadialGradient(x, y, 10, x, y, s.r);
-        rg.addColorStop(0, "rgba(183,175,164," + (0.82 * a).toFixed(2) + ")");
-        rg.addColorStop(1, "rgba(183,175,164,0)");
-        ctx.fillStyle = rg;
-        ctx.beginPath(); ctx.arc(x, y, s.r, 0, Math.PI * 2); ctx.fill();
+      // gust window: a steady border frame for the whole duration, so "chaos entries are
+      // active" stays legible at a glance without needing a running countdown readout
+      if (this.windUntil && simT < this.windUntil) {
+        const pulse = 0.4 + 0.15 * Math.sin(nowT / 220);
+        ctx.strokeStyle = "rgba(95,135,168," + pulse.toFixed(2) + ")";
+        ctx.lineWidth = 14;
+        ctx.strokeRect(7, 7, W - 14, H - 14);
       }
-      this.smokes = this.smokes.filter((s) => nowT - s.born < s.dur);
 
       // bomb flash
       if (nowT < this.flashUntil) {

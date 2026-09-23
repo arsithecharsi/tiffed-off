@@ -140,6 +140,11 @@ input::placeholder { color: #b9b0a2; }
 .bhud .tick { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 900; }
 .bhud .sc { font-size: 1.2em; }
 .bhud svg { vertical-align: -2px; }
+.endrun-btn {
+  font: inherit; font-weight: 900; font-size: 11px; letter-spacing: .5px;
+  color: var(--paper); background: var(--red); border: 2px solid var(--ink);
+  border-radius: 7px; padding: 4px 9px 2px; cursor: pointer;
+}
 
 .timerbar { height: 5px; background: rgba(42,38,36,.15); z-index: 5; }
 .timerbar-fill { height: 100%; width: 100%; background: var(--red); transition: width .25s linear; }
@@ -189,6 +194,13 @@ input::placeholder { color: #b9b0a2; }
   border: 2.5px solid var(--ink); border-radius: 8px; padding: 4px 8px 1px;
   z-index: 2;
 }
+/* a landed combo lights the wallet up while the income burst lasts */
+.coinchip.burst { background: var(--green); color: var(--paper); animation: burstpulse .55s infinite alternate; }
+.coinchip.burst::after { content: attr(data-burst); font-size: 9px; margin-left: 3px; opacity: .9; }
+@keyframes burstpulse {
+  from { box-shadow: 2.5px 2.5px 0 var(--ink); }
+  to   { box-shadow: 2.5px 2.5px 0 var(--ink), 0 0 9px var(--green); }
+}
 .lane-label {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
   font-size: 10px; font-weight: 900; letter-spacing: 2px; color: rgba(42,38,36,.35);
@@ -199,10 +211,9 @@ input::placeholder { color: #b9b0a2; }
   position: absolute; top: 50%; transform: translate(-50%,-50%);
   transition: left .12s linear; z-index: 1; line-height: 0;
 }
-.qitem .qshield { position: absolute; inset: -4px; border: 2.5px solid var(--green); border-radius: 50%; }
 
 /* weapon slots */
-.weapon-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.weapon-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .wpn {
   position: relative; font: inherit; cursor: pointer;
   background: #fffdf6; color: var(--ink);
@@ -220,7 +231,6 @@ input::placeholder { color: #b9b0a2; }
 .wpn .wn { font-size: 8.5px; font-weight: 900; letter-spacing: .5px; pointer-events: none; }
 .wpn .wc { font-family: "Luckiest Guy","Arial Black",sans-serif; font-size: 11px; color: var(--gold); -webkit-text-stroke: .5px var(--ink); pointer-events: none; }
 .wpn.cant { opacity: .38; }
-.wpn.armed { border-color: var(--green); box-shadow: 3px 3px 0 var(--green); }
 .wpn.aiming { border-color: var(--gold); background: #fff3d6; }
 .wpn .cdover {
   position: absolute; left: 0; right: 0; bottom: 0; background: rgba(42,38,36,.45);
@@ -268,5 +278,5 @@ input::placeholder { color: #b9b0a2; }
   #rotate-overlay { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .slab, .wpn, .toast, .qitem { transition: none; animation: none; }
+  .slab, .wpn, .toast, .qitem, .coinchip.burst { transition: none; animation: none; }
 }
