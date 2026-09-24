@@ -1,7 +1,7 @@
-/* TIFFED OFF! — app flow: poster, lobby, simultaneous PvP match, decks & fuse lanes. */
+/* TIFFED OFF! — app flow: poster, lobby, simultaneous PvP match, decks. */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const { Arena, ROUND_MS, HEARTS, HEART_PENALTY, tierOf, TIER_VENT, TIER_NAMES, WEAPON_NAMES } = Game;
+  const { Arena, ROUND_MS, HEARTS, HEART_PENALTY, tierOf, TIER_VENT, TIER_NAMES } = Game;
 
   /* ---------- weapons ---------- */
   // every weapon is offensive now — defense is dodging skill, not a purchase.
@@ -22,13 +22,11 @@
   const BOMB_FATIGUE_PRICES = [20, 25, 32], BOMB_FATIGUE_MS = 6000;
   const PLAYTEST_LOG_MAX = 60;
 
-  const tierWord = (t) => (t ? TIER_NAMES[t] + " " : "");
-  const ANNOUNCE = {
-    bomb:  (n, t) => n + "'S " + tierWord(t) + "BOMB!",
-    trap:  (n, t) => t === 3 ? n + " PLANTED A STRAWBERRY PATCH… ONE'S FAKE" : n + " SENT A " + tierWord(t) + "GIFT…",
-    flood: (n, t) => n + " HIT " + (t === 3 ? "THE GAUNTLET" : tierWord(t) + "RUSH"),
-    gust:  (n, t) => n + " KICKED UP A " + tierWord(t) + "GUST — STUFF FLYING IN FROM EVERY SIDE",
-  };
+  // incoming-attack banner: just the attack's name — a glance, not a read.
+  // Fakes don't name what they are ("GIFT…") — that's the whole trick.
+  const SIGNATURES = { bomb: "BOMB CROWN!", trap: "STRAWBERRY PATCH!", flood: "GAUNTLET!", gust: "CATEGORY 5!" };
+  const BASE_NAMES = { bomb: "BOMB!", trap: "GIFT…", flood: "RUSH!", gust: "GUST!" };
+  const attackName = (w, t) => (t === 3 ? SIGNATURES[w] : (t ? TIER_NAMES[t] + " " : "") + BASE_NAMES[w]);
   // no banner for ordinary bombs — they should feel like bad luck, not a telegraphed
   // event. The 100% signature bomb is the exception: that one you're meant to see coming.
   const isSilent = (w, tier) => w === "bomb" && tier < 3;
@@ -89,23 +87,14 @@
   paintPoster();
 
   /* ================================================================
-     BoardUI — DOM for one player's board (HUD, arena, fuse lane, deck)
+     BoardUI — DOM for one player's board (HUD, meter, arena, deck)
      ================================================================ */
   class BoardUI {
     constructor(opts) {  // {rot, solo, testBar}
       this.rot = !!opts.rot;
       const root = document.createElement("div");
       root.className = "board" + (this.rot ? " rot" : "") + (opts.solo ? " solo" : "");
-      // the lane: attacks slide right→left toward the impact spark, accelerating; the
-      // left quarter is the danger zone. The wallet sits outside it so it's always readable.
-      const deckHtml =
-        '<div class="deck">' +
-          '<div class="lane-row">' +
-            '<div class="lane"><span class="impact"></span><span class="spark">' + Assets.icon("spark", 28) + '</span><span class="lane-label">INCOMING</span></div>' +
-            '<span class="coinchip">$0</span>' +
-          '</div>' +
-          '<div class="weapon-row"></div>' +
-        '</div>';
+      const deckHtml = '<div class="deck"><span class="coinchip">$0</span><div class="weapon-row"></div></div>';
       // the old unlabeled timer bar is gone — that strip is now the TIFFED OFF meter
       root.innerHTML =
         '<div class="bhud"><span class="me"></span><span class="tick">1:30</span><span class="them"></span></div>' +
@@ -127,9 +116,7 @@
       this.canvas = root.querySelector("canvas");
       this.announceEl = root.querySelector(".board-announce");
       this.countdownEl = root.querySelector(".countdown");
-      this.lane = root.querySelector(".lane");
       this.coinchip = root.querySelector(".coinchip");
-      this.laneLabel = root.querySelector(".lane-label");
       this.weaponRow = root.querySelector(".weapon-row");
       this._announceT = 0; this._burstT = 0;
       if (opts.testBar) {
@@ -178,28 +165,6 @@
       this.countdownEl.classList.remove("hidden");
       this.countdownEl.textContent = text;
     }
-    addFuseItem(q) {  // q: {w, tier, at, total}
-      const el = document.createElement("span");
-      el.className = "qitem w-" + q.w + " t" + (q.tier || 0);
-      el.innerHTML = q.w === "trap"
-        ? '<span class="qfake">?</span>'
-        : Assets.icon(WEAPONS.find((x) => x.id === q.w).icon, 30);
-      this.lane.appendChild(el);
-      q.el = el;
-      this.moveFuseItem(q);
-    }
-    moveFuseItem(q) {
-      const r = Math.max(0, q.at - performance.now()) / q.total;
-      // r^0.6: starts slow, then accelerates into the spark — urgency you can read at a glance
-      q.el.style.left = (9 + Math.pow(r, 0.6) * 80) + "%";
-      q.el.classList.toggle("danger", r < 0.25);
-    }
-    removeFuseItem(q) {
-      if (!q.el) return;
-      q.el.remove();
-      this.lane.classList.remove("hit"); void this.lane.offsetWidth; this.lane.classList.add("hit");
-    }
-    setLaneHot(hot) { this.laneLabel.classList.toggle("hot", hot); }
     destroy() { this.root.remove(); }
   }
 
@@ -207,10 +172,9 @@
      Deck — one player's weapon economy
      ================================================================ */
   class Deck {
-    constructor(ui, opts) {  // {onLaunch(w, dxClient|null, tier), onRich(), meter(), vent(tier)}
+    constructor(ui, opts) {  // {onLaunch(w, dxClient|null, tier), meter(), vent(tier)}
       this.ui = ui;
       this.onLaunch = opts.onLaunch;
-      this.onRich = opts.onRich || (() => {});
       this.meter = opts.meter;   // coins buy the attack; the board's TIFFED OFF meter powers it
       this.vent = opts.vent;
       this.coins = START_COINS;
@@ -221,7 +185,6 @@
       this.bombRun = 0; this.bombRunUntil = 0;   // repeat fatigue
       this.lastW = null;
       this.pt = { attacks: 0, repeats: 0, tiers: [0, 0, 0, 0] };   // playtest counters
-      this.richSent = false;
       this.btns = {};
       WEAPONS.forEach((w) => {
         const b = document.createElement("button");
@@ -289,7 +252,7 @@
       const now = performance.now();
       const price = this.priceOf(w);
       if ((this.cds[w.id] || 0) > now) { SFX.deny(); return; }
-      if (this.coins < price) { SFX.deny(); this.ui.announce('<span class="warn">NOT ENOUGH CASH</span>', 900); return; }
+      if (this.coins < price) { SFX.deny(); return; }
       this.coins -= price;
       this.cds[w.id] = now + w.cd;
       // the attack is as strong as your current heat, and firing it vents that heat
@@ -304,17 +267,13 @@
       this.pt.tiers[tier]++;
       this.lastW = w.id;
       SFX.send();
-      if (tier) this.ui.announce('<span class="warn">' + (tier === 3 ? "TIFFED OFF " : TIER_NAMES[tier] + " ") + w.n + "!</span>", 1000);
       this.onLaunch(w.id, dxClient, tier);
       this.refresh();
     }
 
     tick() {
       const now = performance.now();
-      if (this.running) {
-        this.coins += this.rate() * (now - this._lastT) / 1000;
-        if (!this.richSent && this.coins >= 100) { this.richSent = true; this.onRich(); }
-      }
+      if (this.running) this.coins += this.rate() * (now - this._lastT) / 1000;
       this._lastT = now;
       this.ui.coinchip.textContent = "$" + Math.floor(this.coins);
       this.refresh();
@@ -341,11 +300,6 @@
         }
       });
     }
-  }
-
-  function dodgeLine(name, w, tier) {
-    const n = esc(name.toUpperCase());
-    return w === "trap" ? n + " DIDN'T FALL FOR IT" : n + " SURVIVED YOUR " + tierWord(tier) + WEAPON_NAMES[w];
   }
 
   // everything a finished board reports: arena skill stats + deck economy + playtest counters
@@ -379,7 +333,7 @@
 
   /* ================================================================
      Bot — the GOD BOT opponent for practice/test mode. It speaks the same
-     messages a remote phone does (atk / st / hurt / trapped / dodge / end), so
+     messages a remote phone does (atk / st / hurt / trapped / end), so
      solo runs the real PvP code path — just with no network and no bot board.
      ================================================================ */
   const BOT_NAME = "GOD BOT";
@@ -463,7 +417,6 @@
     resolveAttack(w, tier) {
       if (Math.random() >= BOT_FAIL[w][tier]) {
         this.meter = Math.min(100, this.meter + (w === "bomb" && tier < 2 ? 4 : tier >= 2 ? 12 : 8));
-        if (!(w === "bomb" && tier < 2)) this.send({ t: "dodge", w, tier });
         return;
       }
       this.meter = Math.max(0, this.meter - (w === "trap" ? 12 : 20));
@@ -516,7 +469,6 @@
       }
       // the first board is measured before the second reflows the column — re-measure both
       requestAnimationFrame(() => this.boards.forEach((b) => b.arena.resize()));
-      this._qiv = setInterval(() => this.tickQueues(), 100);
       if (this.bot) {
         this.wireTestBar(this.boards[0]);
         this._tiv = setInterval(() => this.applyTest(this.boards[0]), 100);
@@ -540,7 +492,7 @@
 
     makeBoard(opts) {
       const ui = new BoardUI(opts);
-      const board = { ui, name: opts.name, queue: [], timeouts: new Set() };
+      const board = { ui, name: opts.name, timeouts: new Set() };
       board.arena = new Arena(ui.canvas, {
         rotated: opts.rot,
         onCoin: (n) => board.deck.addCoins(n),
@@ -552,10 +504,6 @@
         meter: () => board.arena.meter,
         vent: (tier) => { board.arena.vent(tier); this.applyTest(board); },   // a meter lock survives rapid fire
         onLaunch: (w, dxClient, tier) => this.launch(board, w, dxClient, tier),
-        onRich: () => {
-          if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " IS SITTING ON $100+", 1800);
-          else this.send({ t: "rich" });
-        },
       });
       return board;
     }
@@ -603,35 +551,21 @@
       const aimX = this.aimFrom(board, dxClient);
       const [fMin, fMax] = w === "bomb" && tier < 3 ? [BOMB_FUSE_MIN, BOMB_FUSE_MAX] : [FUSE_MIN, FUSE_MAX];
       const delay = Math.round(rand(fMin, fMax));
-      if (this.test.mirror) this.deliver(board, board.name, w, aimX, delay, tier);   // HIT ME: preview it on yourself
-      else if (this.mode === "couch") this.deliver(this.otherBoard(board), board.name, w, aimX, delay, tier);
+      if (this.test.mirror) this.deliver(board, w, aimX, delay, tier);   // HIT ME: preview it on yourself
+      else if (this.mode === "couch") this.deliver(this.otherBoard(board), w, aimX, delay, tier);
       else this.send({ t: "atk", w, aimX, delay, tier });
     }
 
-    deliver(victim, fromName, w, aimX, delay, tier) {
+    // the attack still lands after a short randomized fuse; the banner is the only warning
+    deliver(victim, w, aimX, delay, tier) {
       if (this.over) return;
       tier = tier | 0;
-      if (!isSilent(w, tier)) {
-        victim.ui.announce('<span class="warn">INCOMING!</span> ' + ANNOUNCE[w](esc(fromName.toUpperCase()), tier));
-      }
-      const q = { w, tier, at: performance.now() + delay, total: delay };
-      victim.queue.push(q);
-      victim.ui.addFuseItem(q);
-      SFX.tick();
+      if (!isSilent(w, tier)) { victim.ui.announce('<span class="warn">' + attackName(w, tier) + "</span>", 1100); SFX.tick(); }
       const to = setTimeout(() => {
         victim.timeouts.delete(to);
-        victim.queue = victim.queue.filter((x) => x !== q);
-        victim.ui.removeFuseItem(q);
-        if (!this.over) victim.arena.handleSend(w, aimX, tier, fromName);
+        if (!this.over) victim.arena.handleSend(w, aimX, tier);
       }, delay);
       victim.timeouts.add(to);
-    }
-
-    tickQueues() {
-      this.boards.forEach((b) => {
-        b.queue.forEach((q) => b.ui.moveFuseItem(q));
-        b.ui.setLaneHot(b.queue.length > 0);
-      });
     }
 
     /* ----- arena events ----- */
@@ -640,34 +574,23 @@
         if (this.mode === "couch") {
           const other = this.otherBoard(board);
           other.deck.addCoins(HEART_BOUNTY);
-          other.ui.announce("YOU GOT " + esc(board.name.toUpperCase()) + "! +$" + HEART_BOUNTY, 1600);
+          other.ui.announce("HIT! +$" + HEART_BOUNTY, 1000);
         } else this.send({ t: "hurt", hearts: m.hearts });
       } else if (m.t === "trap") {
         // the steal itself happens here (main.js owns the Deck) — Arena only told us
         // it happened and where, so the popup lands at the right spot on the victim's board
         const stolen = Math.round(board.deck.coins * TRAP_STEAL_PCT);
         board.deck.coins = Math.max(0, board.deck.coins - stolen);
-        board.arena.popups.push({ x: m.x, y: m.y + 55, text: "-$" + stolen + " STOLEN", color: "#8c46c8", size: 24, born: performance.now(), dur: 1000 });
         SFX.steal();
         if (this.mode === "couch") {
           const other = this.otherBoard(board);
           other.deck.addCoins(stolen);
-          other.ui.announce(esc(board.name) + " FELL FOR THE FAKE — STOLE $" + stolen, 1800);
+          other.ui.announce("STOLE $" + stolen, 1000);
         } else {
           this.send({ t: "trapped", stolen });
         }
-      } else if (m.t === "combo") {
-        if (m.n >= 5) {
-          if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " ×" + m.n + " COMBO?!", 1600);
-          else this.send({ t: "combo", n: m.n });
-        }
-      } else if (m.t === "dodge") {
-        // tell the sender their attack got read — the opponent should feel present both ways
-        if (m.w === "bomb" && m.tier < 2) return;
-        if (this.mode === "couch") this.otherBoard(board).ui.announce(dodgeLine(board.name, m.w, m.tier), 1600);
-        else this.send({ t: "dodge", w: m.w, tier: m.tier });
       } else if (m.t === "phase") {
-        board.ui.announce('<span class="warn">' + m.name + "!</span>", 1400);
+        board.ui.announce('<span class="warn">' + m.name + "!</span>", 1000);
         if (board === this.boards[this.boards.length - 1]) SFX.phase();
       } else if (m.t === "end") {
         const stats = boardStats(board);
@@ -692,19 +615,16 @@
     /* ----- remote messages ----- */
     onNet(m) {
       const me = this.boards[0];
-      if (m.t === "atk") this.deliver(me, S.theirName, m.w, m.aimX, m.delay, m.tier);
-      else if (m.t === "dodge") me.ui.announce(dodgeLine(S.theirName, m.w, m.tier), 1600);
+      if (m.t === "atk") this.deliver(me, m.w, m.aimX, m.delay, m.tier);
       else if (m.t === "hurt") {
         this.themState.hearts = m.hearts;
         me.deck.addCoins(HEART_BOUNTY);
-        me.ui.announce("YOU GOT " + esc(S.theirName.toUpperCase()) + "! +$" + HEART_BOUNTY, 1600);
+        me.ui.announce("HIT! +$" + HEART_BOUNTY, 1000);
       }
       else if (m.t === "trapped") {
         me.deck.addCoins(m.stolen);
-        me.ui.announce(esc(S.theirName) + " FELL FOR THE FAKE — STOLE $" + m.stolen, 1800);
+        me.ui.announce("STOLE $" + m.stolen, 1000);
       }
-      else if (m.t === "combo") me.ui.announce(esc(S.theirName) + " ×" + m.n + " COMBO?!", 1600);
-      else if (m.t === "rich") me.ui.announce(esc(S.theirName) + " IS SITTING ON $100+", 1800);
       else if (m.t === "st") { this.themState.score = m.score; this.themState.hearts = m.hearts; this.themState.tier = m.tier | 0; }
       else if (m.t === "end") {
         this.results[S.theirName] = { score: m.score, reason: m.reason, stats: m.stats };
@@ -818,7 +738,7 @@
     }
 
     stop() {
-      clearInterval(this._qiv); clearInterval(this._stiv); clearInterval(this._tiv);
+      clearInterval(this._stiv); clearInterval(this._tiv);
       if (this.bot) this.bot.stop();
       this.boards.forEach((b) => {
         b.arena.stopRound(); b.arena.destroy();
@@ -865,7 +785,7 @@
     Net.on("lobbyok", () => { if (!S.isHost && !(S.match && !S.match.over)) enterLobby(); });
     Net.on("start", () => startMatch());
     Net.on("ready", () => { S.theirReady = true; maybeRematch(); });
-    ["atk", "hurt", "trapped", "combo", "rich", "st", "end", "dodge"].forEach((t) =>
+    ["atk", "hurt", "trapped", "st", "end"].forEach((t) =>
       Net.on(t, (m) => { if (S.match) S.match.onNet(m); })
     );
     Net.onClose = () => {

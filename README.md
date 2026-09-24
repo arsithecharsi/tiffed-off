@@ -37,10 +37,9 @@ earnings to ruin each other's run.
 - Losing a heart costs score too, and it gets worse each time: **−30 / −50 /
   −70** for your 1st/2nd/3rd heart. A close match can flip entirely on
   whoever's down to their last heart.
-- **Spend** coins on attacks. They physically launch onto the other board on a
-  randomized fuse, shown in the victim's **INCOMING lane** (items accelerate
-  into the impact spark, shake in the hatched last-quarter danger zone, and
-  are ringed by tier):
+- **Spend** coins on attacks. They land on the other board after a short
+  randomized fuse; everything but an ordinary bomb flashes its name first
+  ("FUMING RUSH!", "GAUNTLET!" — fakes only ever say "GIFT…"):
   - `BOMB $20`, 1.8s cooldown — cheap, fast, and silent (no banner) below
     100%. Flick the button to bias where it lands. **Repeat fatigue:** a 2nd
     bomb within 6s costs $25, a 3rd+ $32; a break or any other weapon resets
@@ -58,9 +57,10 @@ earnings to ruin each other's run.
   - `GUST $55`, 14s cooldown — an immediate WHOOSH shoves everything airborne
     sideways, then for ~10s things can enter from any edge. Higher tiers
     shove harder and spawn denser; TIFFED OFF is a short 8s Category 5.
-- Every attack is attributed: "TIFF GOT YOU!", "DODGED TIFF'S BOMB!", and the
-  sender hears "TIFF SURVIVED YOUR FUMING RUSH". Your opponent's current heat
-  (HEATED / FUMING / MAXED) is shown next to their name.
+- On-screen text is kept to quick one- or two-word glances: PERFECT!,
+  CLEAN ×4, DEFUSED!, GOTCHA!, DODGED!, HIT! +$15, STOLE $12, and the BOOM! /
+  TIFFED OFF! stamps. Numbers live in the HUD, not on the board. Your
+  opponent's current heat (HEATED / FUMING / MAXED) shows next to their name.
 - Matches have chapters: SLICE → **SABOTAGE** (60s left) → **SURVIVE** (30s
   left), with a giant countdown behind the play for the last 10 seconds.
 - **Win by KO** (all 3 of their hearts) **or top score** at 90 seconds.

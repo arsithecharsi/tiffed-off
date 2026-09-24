@@ -48,7 +48,6 @@
   const TIER_AT = [0, 40, 70, 100];
   const TIER_VENT = [0, 20, 33, 100];             // the 100% signature consumes the whole meter
   const TIER_NAMES = ["", "HEATED", "FUMING", "TIFFED OFF"];
-  const WEAPON_NAMES = { bomb: "BOMB", trap: "FAKE", flood: "RUSH", gust: "GUST" };
   const tierOf = (m) => (m >= TIER_AT[3] ? 3 : m >= TIER_AT[2] ? 2 : m >= TIER_AT[1] ? 1 : 0);
   const PHASES = [{ at: 30000, name: "SABOTAGE" }, { at: 60000, name: "SURVIVE" }];
 
@@ -198,13 +197,10 @@
       if (t1 <= t0) return;
       if (t1 === 3) {
         this.stats.maxed++;
-        this.stamp = { lines: ["TIFFED", "OFF!"], fill: "#e5254f", until: this.now() + 1400, dur: 1400 };
+        this.stamp = { lines: ["TIFFED", "OFF!"], fill: "#e5254f", until: this.now() + 900, dur: 900 };
         vib([20, 40, 20, 40, 30]);
         SFX.maxed();
-      } else {
-        this.popups.push({ x: W / 2, y: this.H * 0.16, text: TIER_NAMES[t1] + "!", color: t1 === 2 ? "#e5254f" : "#f5920f", size: 48, born: this.now(), dur: 900 });
-        SFX.tierUp(t1);
-      }
+      } else SFX.tierUp(t1);
     }
 
     /* ---------- round control ---------- */
@@ -329,15 +325,15 @@
       this.entities.push(e);
     }
 
-    // an attack lands on THIS board (already fused/delayed by the queue). Everything it
+    // an attack lands on THIS board (after its short randomized fuse). Everything it
     // spawns is tagged with a group, so surviving it cleanly can be rewarded (onGroupDone).
-    handleSend(w, aimX, tier, from) {
+    handleSend(w, aimX, tier) {
       if (!this.running) return;
       tier = tier | 0;
       const ax = clamp(aimX || rand(150, W - 150), 80, W - 80);
       const axc = clamp(ax, 290, W - 290);            // authored shapes need room either side
       const gid = this.nextGroup++;
-      const g = { w, tier, from: from || "", left: 0, failed: false };
+      const g = { w, tier, left: 0, failed: false };
       const tag = (e) => { e.g = gid; g.left++; return e; };
       if (w === "bomb") {
         if (tier === 0) {
@@ -413,7 +409,6 @@
           const y = rand(0, this.H);
           this.particles.push({ streak: true, x: dv > 0 ? -20 : W + 20, y, dx: dv > 0 ? 1 : -1, dy: 0, speed: rand(900, 1300), len: rand(60, 120), color: "rgba(95,135,168,.55)", born: this.now(), dur: rand(500, 800) });
         }
-        this.popups.push({ x: W / 2, y: this.H * 0.4, text: "WHOOSH!", color: "#5f87a8", size: 60, born: this.now(), dur: 800 });
         this.windUntil = simT + GUST_CHAOS_MS[tier];
         this.windBoost = GUST_BOOST[tier];
         this.gustGroup = g;
@@ -439,12 +434,10 @@
       const major = g.w !== "bomb";
       this.gainMeter(!major ? (g.tier >= 2 ? METER.dodgeFuming : METER.dodgeBomb) : (g.tier >= 2 ? METER.dodgeFuming : METER.dodgeMajor));
       this.stats.attacksDodged++;
-      const who = g.from ? g.from.toUpperCase() + "'S " : "";
-      const what = (g.tier ? TIER_NAMES[g.tier] + " " : "") + WEAPON_NAMES[g.w];
-      const text = g.w === "trap" ? "DIDN'T FALL FOR IT!" : g.w === "gust" ? "WEATHERED " + who + what + "!" : "DODGED " + who + what + "!";
-      this.popups.push({ x: W / 2, y: this.H * 0.24, text, color: "#3f9b4f", size: major || g.tier ? 40 : 28, born: this.now(), dur: 1100 });
-      if (major || g.tier) SFX.dodge();
-      this.onEvent({ t: "dodge", w: g.w, tier: g.tier });
+      if (major || g.tier) {
+        this.popups.push({ x: W / 2, y: this.H * 0.24, text: "DODGED!", color: "#3f9b4f", size: 40, born: this.now(), dur: 700 });
+        SFX.dodge();
+      }
     }
 
     /* ---------- physics ---------- */
@@ -543,14 +536,9 @@
           if (tier === "PERFECT") this.gainMeter(berry ? METER.perfectBerry : METER.perfect);
           else if (tier === "GREAT") this.gainMeter(METER.great);
           else tr.clean = false;
+          // text is a quick glance, not a read: only PERFECT gets a word (the streak shows as !s)
           const lvl = this.streakLevel();
-          const label = tier === "PERFECT"
-            ? (berry ? "PERFECT BERRY" : "PERFECT") + "!".repeat(1 + lvl) + " +" + pts
-            : (tier ? tier + " " : "") + (e.crit ? "CRIT " : "") + "+" + pts;
-          const color = tier === "PERFECT" ? "#3f9b4f" : (e.crit ? "#f0a821" : "#2a2624");
-          const size = tier === "PERFECT" ? 50 + lvl * 6 : (e.crit ? 46 : 36);
-          this.popups.push({ x: p.x, y: p.y, text: label, color, size, born: this.now(), dur: tier === "PERFECT" ? 900 : 750 });
-          this.popups.push({ x: p.x + 30, y: p.y + 24, text: "+$" + coin, color: "#f0a821", size: berry ? 26 : 20, born: this.now(), dur: 650 });
+          if (tier === "PERFECT") this.popups.push({ x: p.x, y: p.y, text: "PERFECT" + "!".repeat(1 + lvl), color: "#3f9b4f", size: 44 + lvl * 5, born: this.now(), dur: 550 });
           tr.count++; tr.lastSlice = this.now();
           if (berry) SFX.straw(); else SFX.splat();
           if (tier === "PERFECT") {
@@ -601,8 +589,7 @@
         const a = rand(0, Math.PI * 2), sp = rand(80, 380);
         this.particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60, r: rand(5, 12), color: "#6fcf7d", born: this.now(), dur: rand(450, 800) });
       }
-      this.popups.push({ x: p.x, y: p.y, text: "DEFUSED! +" + DUD_SCORE, color: "#3f9b4f", size: 42, born: this.now(), dur: 900 });
-      this.popups.push({ x: p.x + 30, y: p.y + 24, text: "+$" + DUD_COIN, color: "#f0a821", size: 20, born: this.now(), dur: 650 });
+      this.popups.push({ x: p.x, y: p.y, text: "DEFUSED!", color: "#3f9b4f", size: 40, born: this.now(), dur: 600 });
       vib([10, 30, 10]);
       SFX.defuse();
     }
@@ -615,8 +602,7 @@
       this.stats.dudFizzles++;
       this.loseMeter(METER.fizzle);
       this.burstPoof(p);
-      this.popups.push({ x: p.x, y: p.y, text: "FIZZLED -" + DUD_FIZZLE_PENALTY, color: "#9a938a", size: 30, born: this.now(), dur: 800 });
-      this.popups.push({ x: p.x, y: p.y + 40, text: "(tap duds!)", color: "#3f9b4f", size: 20, born: this.now(), dur: 800 });
+      this.popups.push({ x: p.x, y: p.y, text: "TAP IT!", color: "#9a938a", size: 30, born: this.now(), dur: 600 });
       vib(12);
       SFX.fizzle();
     }
@@ -628,7 +614,6 @@
       this.score = Math.max(0, this.score - penalty);
       this.stats.bombHits++;
       this.loseMeter(METER.bomb);
-      const from = e.g && this.groups.get(e.g) ? this.groups.get(e.g).from : "";
       this.resolve(e, true);
       if (this.gustGroup) this.gustGroup.failed = true;
       for (const o of this.entities) {
@@ -642,11 +627,7 @@
       this.shakeUntil = this.now() + 500;
       this.flashUntil = this.now() + 200;
       this.trails.forEach((tr) => { tr.count = 0; tr.clean = true; });
-      this.popups.push({ x: p.x, y: p.y, text: "-1 HEART", color: "#e5254f", size: 52, born: this.now(), dur: 1000 });
-      this.popups.push({ x: p.x, y: p.y + 62, text: "-" + penalty + " SCORE", color: "#9a938a", size: 26, born: this.now(), dur: 900 });
-      // a sent bomb should feel like it came from a person, not the game engine
-      if (from) this.popups.push({ x: W / 2, y: this.H * 0.62, text: from.toUpperCase() + " GOT YOU!", color: "#2a2624", size: 40, born: this.now(), dur: 1300 });
-      this.stamp = { lines: ["BOOM!"], fill: "#f5920f", until: this.now() + 1100, dur: 1100 };
+      this.stamp = { lines: ["BOOM!"], fill: "#f5920f", until: this.now() + 800, dur: 800 };
       vib([40, 60, 40]);
       SFX.boom(); SFX.heart();
       this.onEvent({ t: "hurt", hearts: this.hearts });
@@ -661,7 +642,7 @@
       this.burstTrap(p);
       // the fruit pops… a beat… then the purple GOTCHA
       this.freezeSimT = this.simT(); this.freezeUntil = this.now() + 110;
-      this.popups.push({ x: p.x, y: p.y, text: "GOTCHA! -" + TRAP_PENALTY, color: "#8c46c8", size: 50, born: this.now() + 90, dur: 1200 });
+      this.popups.push({ x: p.x, y: p.y, text: "GOTCHA!", color: "#8c46c8", size: 50, born: this.now() + 90, dur: 700 });
       this.flashUntil = this.now() + 160; this.flashColor = "140,70,200";
       vib([20, 60, 30]);
       SFX.trap();
@@ -682,11 +663,8 @@
         this.onBurst(tr.count);
         this.stats.bestCombo = Math.max(this.stats.bestCombo, tr.count);
         if (clean) { this.stats.cleanCombos++; this.gainMeter(METER.clean[tr.count] || METER.cleanMax); }
-        const label = (clean ? "CLEAN ×" : "×") + tr.count + (clean ? "" : " COMBO") + "  +" + bonus;
-        this.popups.push({ x: W / 2, y: this.H * 0.3, text: label, color: clean ? "#3f9b4f" : "#e5254f", size: 52, born: this.now(), dur: 1100 });
-        this.popups.push({ x: W / 2, y: this.H * 0.3 + 90, text: "+$" + coins, color: "#f0a821", size: 40, born: this.now(), dur: 1100 });
+        this.popups.push({ x: W / 2, y: this.H * 0.3, text: (clean ? "CLEAN ×" : "×") + tr.count, color: clean ? "#3f9b4f" : "#e5254f", size: 52, born: this.now(), dur: 700 });
         SFX.combo(tr.count);
-        this.onEvent({ t: "combo", n: tr.count });
       }
       tr.count = 0; tr.clean = true;
     }
@@ -797,7 +775,6 @@
             } else {
               this.score = Math.max(0, this.score - MISS_PENALTY);
               this.loseMeter(METER.miss);
-              this.popups.push({ x: clamp(p.x, 80, W - 80), y: this.H - 120, text: "miss -" + MISS_PENALTY, color: "#9a938a", size: 30, born: nowT, dur: 700 });
               SFX.miss();
             }
             this.resolve(e, false);
@@ -1031,5 +1008,5 @@
     }
   }
 
-  window.Game = { Arena, W, ROUND_MS, HEARTS, HEART_PENALTY, FRUITS, KINDS, tierOf, TIER_VENT, TIER_NAMES, WEAPON_NAMES };
+  window.Game = { Arena, W, ROUND_MS, HEARTS, HEART_PENALTY, FRUITS, KINDS, tierOf, TIER_VENT, TIER_NAMES };
 })();

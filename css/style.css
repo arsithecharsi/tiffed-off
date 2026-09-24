@@ -146,7 +146,7 @@ input::placeholder { color: #b9b0a2; }
   font-family: "Luckiest Guy", "Arial Black", sans-serif; font-weight: 400;
   font-size: 24px; color: var(--ink); font-variant-numeric: tabular-nums;
 }
-.bhud .tick.urgent { color: var(--red); animation: lanepulse .5s infinite alternate; }
+.bhud .tick.urgent { color: var(--red); animation: pulse .5s infinite alternate; }
 .bhud svg { vertical-align: -2px; }
 .heat {
   font-size: 9px; letter-spacing: .5px; color: var(--paper); border-radius: 4px;
@@ -154,7 +154,7 @@ input::placeholder { color: #b9b0a2; }
 }
 .heat.t1 { background: #f5920f; }
 .heat.t2 { background: var(--red); }
-.heat.t3 { background: var(--purple); animation: lanepulse .35s infinite alternate; }
+.heat.t3 { background: var(--purple); animation: pulse .35s infinite alternate; }
 
 /* TIFFED OFF meter — the one skill resource. Notches at the HEATED / FUMING thresholds. */
 .meter {
@@ -210,7 +210,9 @@ input::placeholder { color: #b9b0a2; }
 .hidden { display: none !important; }
 
 /* ---------- attack deck ---------- */
+/* wallet on the left, weapons on the right — coins always in view */
 .deck {
+  display: flex; align-items: stretch; gap: 6px;
   background: var(--paper2);
   border-top: 3px solid var(--ink);
   padding: 8px 6px 6px; z-index: 5;
@@ -218,28 +220,8 @@ input::placeholder { color: #b9b0a2; }
 }
 .board.solo .deck { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
 
-/* the fuse lane: attacks slide right→left into the impact spark, speeding up as they go.
-   The left quarter is a hatched danger zone; the wallet sits beside the lane, always visible. */
-.lane-row { display: flex; align-items: stretch; gap: 6px; margin: 0 2px 7px; }
-.lane {
-  position: relative; flex: 1; height: 48px;
-  border: 3px solid var(--ink); border-radius: 9px; background: #fffdf6;
-  overflow: hidden;
-}
-.lane::before {
-  content: ""; position: absolute; left: 8px; right: 8px; top: 50%;
-  border-top: 3px dashed rgba(42,38,36,.4);
-}
-.lane .impact {
-  position: absolute; left: 0; top: 0; bottom: 0; width: 24%;
-  background: repeating-linear-gradient(-45deg, rgba(229,37,79,.13) 0 7px, transparent 7px 14px);
-  border-right: 2px solid rgba(229,37,79,.45);
-}
-.lane .spark { position: absolute; left: 3px; top: 50%; transform: translateY(-50%); z-index: 2; }
-.lane.hit .spark { animation: sparkhit .35s ease-out; }
-@keyframes sparkhit { 0% { transform: translateY(-50%) scale(1.8) rotate(25deg); } 100% { transform: translateY(-50%) scale(1); } }
 .coinchip {
-  display: flex; align-items: center; justify-content: center; min-width: 66px;
+  display: flex; align-items: center; justify-content: center; min-width: 64px; flex: none;
   transform: rotate(2deg);
   font-family: "Luckiest Guy", "Arial Black", sans-serif;
   font-size: 20px; color: var(--ink); background: var(--gold);
@@ -249,33 +231,13 @@ input::placeholder { color: #b9b0a2; }
 /* a landed combo lights the wallet up while the income burst lasts */
 .coinchip.burst { background: var(--green); color: var(--paper); animation: burstpulse .55s infinite alternate; }
 .coinchip.burst::after { content: attr(data-burst); font-size: 9px; margin-left: 3px; opacity: .9; }
+@keyframes pulse { from { opacity: .55; } to { opacity: 1; } }
 @keyframes burstpulse {
   from { box-shadow: 2.5px 2.5px 0 var(--ink); }
   to   { box-shadow: 2.5px 2.5px 0 var(--ink), 0 0 9px var(--green); }
 }
-.lane-label {
-  position: absolute; left: 60%; top: 50%; transform: translate(-50%,-50%);
-  font-size: 11px; font-weight: 900; letter-spacing: 2px; color: rgba(42,38,36,.35);
-}
-.lane-label.hot { color: var(--red); animation: lanepulse .5s infinite alternate; }
-@keyframes lanepulse { from { opacity: .55; } to { opacity: 1; } }
-.qitem {
-  position: absolute; top: 50%; transform: translate(-50%,-50%);
-  transition: left .1s linear; z-index: 1; line-height: 0;
-  background: #fffdf6; border: 2.5px solid var(--ink); border-radius: 50%; padding: 3px;
-}
-.qitem .qfake { display: block; width: 30px; line-height: 32px; text-align: center; font-family: "Luckiest Guy", sans-serif; font-size: 26px; color: var(--purple); }
-.qitem.w-trap { border-color: var(--purple); }
-.qitem.w-flood { border-color: var(--red); }
-.qitem.w-gust { border-color: #5f87a8; }
-.qitem.t1 { box-shadow: 0 0 0 3px #f5920f; }
-.qitem.t2 { box-shadow: 0 0 0 3px var(--red); }
-.qitem.t3 { box-shadow: 0 0 0 3px var(--purple), 0 0 0 6px var(--red); }
-.qitem.danger { animation: qdanger .16s infinite alternate; }
-@keyframes qdanger { from { transform: translate(-50%,-50%) scale(1.08) rotate(-6deg); } to { transform: translate(-50%,-50%) scale(1.2) rotate(6deg); } }
-
 /* weapon slots */
-.weapon-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.weapon-row { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .wpn {
   position: relative; font: inherit; cursor: pointer;
   background: #fffdf6; color: var(--ink);
@@ -353,5 +315,5 @@ input::placeholder { color: #b9b0a2; }
   #rotate-overlay { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .slab, .wpn, .toast, .qitem, .qitem.danger, .coinchip.burst, .meter, .meter-fill, .lane.hit .spark { transition: none; animation: none; }
+  .slab, .wpn, .toast, .coinchip.burst, .meter, .meter-fill { transition: none; animation: none; }
 }
