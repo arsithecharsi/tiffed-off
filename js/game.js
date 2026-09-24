@@ -23,8 +23,19 @@
   const NATURAL_BOMB_CHANCE = [0.02, 0.16];      // [early, late] — ambient Fruit-Ninja-style risk, independent of attacks
   const DUD_CHANCE = 0.2;                         // ~1 in 5 ambient bombs is a dud — tap (don't swipe) to defuse for a bonus
   const DUD_SCORE = 10, DUD_COIN = 15, DUD_FIZZLE_PENALTY = 10;   // swiping a dud now costs you — tap it instead
-  const TAP_MAX_MS = 220;
-  const DUD_TAP_MOVE_TOLERANCE = 26;              // a touch this short/still is a tap, not a swipe (tuned separately from weapon aim)
+  // a touch this short and this still is a tap, not a swipe (tuned separately from weapon aim).
+  // Measured in screen px, not world units — a thumb wobbles the same amount on any board size.
+  const TAP_MAX_MS = 320;
+  const DUD_TAP_MOVE_TOLERANCE = 24;              // screen px of finger drift a tap may have
+  const DUD_TAP_RADIUS = 40;                      // world units of forgiveness beyond the dud's own radius
+  // how loudly a fake gives itself away — raise these if fakes are too hard to spot
+  const FAKE_TELL = {
+    glow: [0.55, 0.2],    // purple glow alpha: base ± pulse
+    blur: 36,
+    sparkle: 0.12,        // chance per frame of a purple sparkle
+    shiver: 0.12,         // radians of nervous wobble
+    jitter: 4,            // world units of side-to-side tremble
+  };
   const BERRY_COIN = 8, BERRY_PERFECT_COIN = 12;  // the TIFF BERRY: a real strawberry is a high-value target… if it's real
   const GUST_CHAOS_MS = [10000, 10000, 11000, 8000];   // per tier — the signature is shorter but far denser
   const GUST_SHOVE = [140, 180, 220, 260];        // immediate sideways WHOOSH on everything already airborne
@@ -457,21 +468,20 @@
     bindInput() {
       const down = (ev) => {
         try { this.canvas.setPointerCapture && this.canvas.setPointerCapture(ev.pointerId); } catch (err) {}
-        this.trails.set(ev.pointerId, { pts: [], count: 0, clean: true, lastSlice: 0, swished: 0 });
+        // remember where and when the touch landed — a tap is judged against that moment,
+        // since a falling dud can travel a thumb's width before the finger lifts
+        const at = this.clientToWorld(ev.clientX, ev.clientY);
+        this.trails.set(ev.pointerId, {
+          pts: [], count: 0, clean: true, lastSlice: 0, swished: 0,
+          down: { cx: ev.clientX, cy: ev.clientY, x: at.x, y: at.y, t: this.now(), simT: this.simT() }, drift: 0,
+        });
         this.addTrailPoint(ev);
       };
       const move = (ev) => { if (this.trails.has(ev.pointerId)) this.addTrailPoint(ev); };
       const up = (ev) => {
         const tr = this.trails.get(ev.pointerId);
         if (tr) {
-          // a touch this short and this still is a tap, not a swipe — try to defuse a dud there
-          const first = tr.pts[0];
-          if (first && this.running) {
-            const rel = this.clientToWorld(ev.clientX, ev.clientY);
-            const dt = this.now() - first.t;
-            const dist = Math.hypot(rel.x - first.x, rel.y - first.y);
-            if (dt < TAP_MAX_MS && dist < DUD_TAP_MOVE_TOLERANCE) this.tryDefuse(rel);
-          }
+          if (this.running && this.maybeTap(tr)) this.tryDefuse(tr.down, this.clientToWorld(ev.clientX, ev.clientY));
           this.finalizeCombo(tr);
         }
         this.trails.delete(ev.pointerId);
@@ -488,10 +498,16 @@
       };
     }
 
+    // still short and still enough to count as a tap (so far)
+    maybeTap(tr) {
+      return this.now() - tr.down.t < TAP_MAX_MS && tr.drift < DUD_TAP_MOVE_TOLERANCE;
+    }
+
     addTrailPoint(ev) {
       const tr = this.trails.get(ev.pointerId);
       const p = this.clientToWorld(ev.clientX, ev.clientY);
       const t = this.now();
+      tr.drift = Math.max(tr.drift, Math.hypot(ev.clientX - tr.down.cx, ev.clientY - tr.down.cy));
       const prev = tr.pts[tr.pts.length - 1];
       tr.pts.push({ x: p.x, y: p.y, t });
       if (tr.pts.length > 14) tr.pts.shift();
@@ -512,6 +528,9 @@
         const p = this.posOf(e, simT);
         if (!p || p.y < -80) continue;
         if (this.segCircle(a, b, p.x, p.y, e.r + 14)) {
+          // a finger wobble mid-tap mustn't fizzle the dud it's trying to defuse —
+          // only a real swipe (moved past tap range, or held too long) can
+          if (e.kind === "dud" && this.maybeTap(tr)) continue;
           e.alive = false;
           if (e.kind === "bomb") { this.hitBomb(e, p, simT); return; }
           if (e.kind === "trap") { this.hitTrap(e, p); continue; }
@@ -565,20 +584,23 @@
       return (cx - px) ** 2 + (cy - py) ** 2 <= r * r;
     }
 
-    // taps (not swipes) hunt for a dud at the touch point — see the `up` handler
-    tryDefuse(pos) {
-      const simT = this.simT();
+    // taps (not swipes) hunt for a dud — generously: where it was when the finger landed,
+    // or where it is as the finger lifts, whichever is closer
+    tryDefuse(down, upPos) {
+      const nowSim = this.simT(), reach = KINDS.dud.r + DUD_TAP_RADIUS;
+      let best = null, bestD = Infinity;
       for (const e of this.entities) {
         if (!e.alive || e.kind !== "dud") continue;
-        const p = this.posOf(e, simT);
-        if (!p) continue;
-        if (Math.hypot(pos.x - p.x, pos.y - p.y) <= KINDS.dud.r + 20) {
-          e.alive = false;
-          this.resolve(e, false);
-          this.hitDud(p);
-          return;
-        }
+        const then = this.posOf(e, down.simT), now = this.posOf(e, nowSim);
+        const d = Math.min(
+          then ? Math.hypot(down.x - then.x, down.y - then.y) : Infinity,
+          now ? Math.hypot(upPos.x - now.x, upPos.y - now.y) : Infinity);
+        if (d <= reach && d < bestD) { best = e; bestD = d; }
       }
+      if (!best) return;
+      best.alive = false;
+      this.resolve(best, false);
+      this.hitDud(this.posOf(best, nowSim));
     }
 
     hitDud(p) {
@@ -868,10 +890,14 @@
         ctx.translate(p.x, p.y);
         ctx.rotate(p.rot * 0.6);
         if (e.kind === "trap") {
-          const pulse = 0.18 + 0.14 * Math.sin(nowT / 160);
-          ctx.shadowColor = "rgba(170,80,255," + pulse.toFixed(2) + ")";
-          ctx.shadowBlur = 30;
-          if (Math.random() < 0.06) this.particles.push({ x: p.x + rand(-40, 40), y: p.y + rand(-40, 40), vx: rand(-30, 30), vy: rand(-60, 0), r: 5, color: "#d9a6ff", born: nowT, dur: 400 });
+          // the tell: a purple glow, purple sparkles, and a nervous shiver no real fruit has
+          const T = FAKE_TELL;
+          const pulse = T.glow[0] + T.glow[1] * Math.sin(nowT / 160);
+          ctx.shadowColor = "rgba(150,60,230," + pulse.toFixed(2) + ")";
+          ctx.shadowBlur = T.blur;
+          ctx.rotate(Math.sin(nowT / 38 + e.id) * T.shiver);
+          ctx.translate(Math.sin(nowT / 29 + e.id * 2) * T.jitter, 0);
+          if (Math.random() < T.sparkle) this.particles.push({ x: p.x + rand(-45, 45), y: p.y + rand(-45, 45), vx: rand(-30, 30), vy: rand(-70, -10), r: rand(5, 8), color: "#a95cf0", born: nowT, dur: 450 });
         }
         if (e.crit) {
           const pulse = 0.5 + 0.3 * Math.sin(nowT / 120);
