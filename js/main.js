@@ -1,7 +1,7 @@
 /* TIFFED OFF! — app flow: poster, lobby, simultaneous PvP match, decks & fuse lanes. */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const { Arena, ROUND_MS, HEARTS } = Game;
+  const { Arena, ROUND_MS, HEARTS, HEART_PENALTY, tierOf, TIER_VENT, TIER_NAMES, WEAPON_NAMES } = Game;
 
   /* ---------- weapons ---------- */
   // every weapon is offensive now — defense is dodging skill, not a purchase.
@@ -16,13 +16,22 @@
   const START_COINS = 40, HEART_BOUNTY = 15, TRAP_STEAL_PCT = 0.20;
   const FUSE_MIN = 500, FUSE_MAX = 2000;
   const BOMB_FUSE_MIN = 250, BOMB_FUSE_MAX = 650;   // short and quiet — no time to consciously plan around it
+  const WEAPON_AIM_DRAG_THRESHOLD = 26;             // a drag this far on a weapon button is an aim flick, not a press
+  // repeat fatigue (Bomb only for this playtest): back-to-back bombs inside the window
+  // get pricier; a short break or firing any other weapon resets it
+  const BOMB_FATIGUE_PRICES = [20, 25, 32], BOMB_FATIGUE_MS = 6000;
+  const PLAYTEST_LOG_MAX = 60;
 
+  const tierWord = (t) => (t ? TIER_NAMES[t] + " " : "");
   const ANNOUNCE = {
-    trap:  (n) => n + " SENT A GIFT…",
-    flood: (n) => n + " HIT RUSH",
-    gust:  (n) => n + " KICKED UP A GUST — 10s OF STUFF FLYING IN FROM EVERY SIDE",
+    bomb:  (n, t) => n + "'S " + tierWord(t) + "BOMB!",
+    trap:  (n, t) => t === 3 ? n + " PLANTED A STRAWBERRY PATCH… ONE'S FAKE" : n + " SENT A " + tierWord(t) + "GIFT…",
+    flood: (n, t) => n + " HIT " + (t === 3 ? "THE GAUNTLET" : tierWord(t) + "RUSH"),
+    gust:  (n, t) => n + " KICKED UP A " + tierWord(t) + "GUST — STUFF FLYING IN FROM EVERY SIDE",
   };
-  const SILENT_ATTACKS = { bomb: true };  // no banner — should feel like ordinary bad luck, not a telegraphed event
+  // no banner for ordinary bombs — they should feel like bad luck, not a telegraphed
+  // event. The 100% signature bomb is the exception: that one you're meant to see coming.
+  const isSilent = (w, tier) => w === "bomb" && tier < 3;
   const KO_LINES = [
     (w, l) => l + " GOT COOKED BY " + w,
     (w, l) => w + " BLEW " + l + " SKY HIGH",
@@ -55,6 +64,7 @@
     return h;
   };
   const rand = (a, b) => a + Math.random() * (b - a);
+  const clock = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
 
   /* ---------- names & poster ---------- */
   $("my-name").value = Store.get("ss_name") || "";
@@ -82,18 +92,27 @@
      BoardUI — DOM for one player's board (HUD, arena, fuse lane, deck)
      ================================================================ */
   class BoardUI {
-    constructor(opts) {  // {rot, solo, noDeck, onEndRun}
+    constructor(opts) {  // {rot, solo, testBar}
       this.rot = !!opts.rot;
       const root = document.createElement("div");
       root.className = "board" + (this.rot ? " rot" : "") + (opts.solo ? " solo" : "");
-      const deckHtml = opts.noDeck ? "" :
+      // the lane: attacks slide right→left toward the impact spark, accelerating; the
+      // left quarter is the danger zone. The wallet sits outside it so it's always readable.
+      const deckHtml =
         '<div class="deck">' +
-          '<div class="lane"><span class="spark">' + Assets.icon("spark", 22) + '</span><span class="lane-label">INCOMING</span><span class="coinchip">$0</span></div>' +
+          '<div class="lane-row">' +
+            '<div class="lane"><span class="impact"></span><span class="spark">' + Assets.icon("spark", 28) + '</span><span class="lane-label">INCOMING</span></div>' +
+            '<span class="coinchip">$0</span>' +
+          '</div>' +
           '<div class="weapon-row"></div>' +
         '</div>';
+      // the old unlabeled timer bar is gone — that strip is now the TIFFED OFF meter
       root.innerHTML =
-        '<div class="bhud"><span class="me"></span><span class="tick">90s</span><span class="them"></span></div>' +
-        '<div class="timerbar"><div class="timerbar-fill"></div></div>' +
+        '<div class="bhud"><span class="me"></span><span class="tick">1:30</span><span class="them"></span></div>' +
+        '<div class="meter" data-tier="0" data-streak="0"><div class="meter-fill"></div>' +
+          '<i class="mk" style="left:40%"></i><i class="mk" style="left:70%"></i>' +
+          '<span class="meter-label">TIFFED OFF</span><span class="meter-pct">0%</span></div>' +
+        (opts.testBar ? '<div class="testbar"><button data-k="lock"></button><button data-k="free">FREE $ + NO CD</button><button data-k="mirror">HIT ME</button><button data-k="bot"></button></div>' : "") +
         '<div class="arena-wrap"><canvas></canvas><div class="board-announce hidden"></div><div class="countdown hidden"></div></div>' +
         deckHtml;
       $("boards").appendChild(root);
@@ -101,7 +120,10 @@
       this.hudMe = root.querySelector(".me");
       this.hudThem = root.querySelector(".them");
       this.hudTick = root.querySelector(".tick");
-      this.timerFill = root.querySelector(".timerbar-fill");
+      this.meterEl = root.querySelector(".meter");
+      this.meterFill = root.querySelector(".meter-fill");
+      this.meterLabel = root.querySelector(".meter-label");
+      this.meterPct = root.querySelector(".meter-pct");
       this.canvas = root.querySelector("canvas");
       this.announceEl = root.querySelector(".board-announce");
       this.countdownEl = root.querySelector(".countdown");
@@ -110,14 +132,19 @@
       this.laneLabel = root.querySelector(".lane-label");
       this.weaponRow = root.querySelector(".weapon-row");
       this._announceT = 0; this._burstT = 0;
-      if (opts.onEndRun) {
-        this.hudThem.innerHTML = '<button class="endrun-btn">END RUN</button>';
-        this.hudThem.querySelector(".endrun-btn").onclick = opts.onEndRun;
+      if (opts.testBar) {
+        this.testBar = {};
+        root.querySelectorAll(".testbar button").forEach((b) => { this.testBar[b.dataset.k] = b; });
       }
     }
-    setElapsed(ms) {
-      this.hudTick.textContent = Math.floor(ms / 1000) + "s";
-      this.timerFill.style.width = Math.min(100, ms / 900).toFixed(1) + "%";
+    setMeter(m, tier, streak) {
+      this.meterFill.style.width = m.toFixed(1) + "%";
+      if (this.meterEl.dataset.tier !== String(tier)) {
+        this.meterEl.dataset.tier = tier;
+        this.meterLabel.textContent = tier === 3 ? "TIFFED OFF!" : tier ? TIER_NAMES[tier] : "TIFFED OFF";
+      }
+      this.meterEl.dataset.streak = streak;
+      this.meterPct.textContent = Math.floor(m) + "%";
     }
     showBurst(mult, ms) {
       this.coinchip.classList.add("burst");
@@ -125,11 +152,20 @@
       clearTimeout(this._burstT);
       this._burstT = setTimeout(() => this.coinchip.classList.remove("burst"), ms);
     }
-    setMe(name, h, score) { this.hudMe.innerHTML = esc(name) + " " + heartsHtml(h) + ' <span class="sc">' + score + "</span>"; }
-    setThem(name, h, score) { this.hudThem.innerHTML = '<span class="sc">' + score + "</span> " + heartsHtml(h) + " " + esc(name); }
-    setTimer(left, dur) {
-      this.hudTick.textContent = Math.ceil(left / 1000) + "s";
-      this.timerFill.style.width = (left / dur * 100).toFixed(1) + "%";
+    // HUD hierarchy: big score first, then name + hearts. innerHTML only when it changes.
+    setMe(name, h, score) {
+      const html = '<span class="sc">' + score + '</span><span class="who">' + esc(name) + " " + heartsHtml(h) + "</span>";
+      if (html !== this._meHtml) { this._meHtml = html; this.hudMe.innerHTML = html; }
+    }
+    setThem(name, h, score, tier) {
+      // their heat is public: "she's FUMING" is a read you can play around
+      const heat = tier ? '<span class="heat t' + tier + '">' + (tier === 3 ? "MAXED" : TIER_NAMES[tier]) + "</span>" : "";
+      const html = '<span class="sc">' + score + '</span><span class="who">' + heat + heartsHtml(h) + " " + esc(name) + "</span>";
+      if (html !== this._themHtml) { this._themHtml = html; this.hudThem.innerHTML = html; }
+    }
+    setTimer(left) {
+      this.hudTick.textContent = clock(left + 999);
+      this.hudTick.classList.toggle("urgent", left <= 10000);
     }
     announce(html, ms) {
       this.announceEl.innerHTML = html;
@@ -142,21 +178,27 @@
       this.countdownEl.classList.remove("hidden");
       this.countdownEl.textContent = text;
     }
-    addFuseItem(q) {  // q: {w, at, total}
+    addFuseItem(q) {  // q: {w, tier, at, total}
       const el = document.createElement("span");
-      el.className = "qitem";
+      el.className = "qitem w-" + q.w + " t" + (q.tier || 0);
       el.innerHTML = q.w === "trap"
-        ? '<span style="font-family:\'Luckiest Guy\',sans-serif;font-size:20px;color:#8c46c8">?</span>'
-        : Assets.icon(WEAPONS.find((x) => x.id === q.w).icon, 22);
+        ? '<span class="qfake">?</span>'
+        : Assets.icon(WEAPONS.find((x) => x.id === q.w).icon, 30);
       this.lane.appendChild(el);
       q.el = el;
       this.moveFuseItem(q);
     }
     moveFuseItem(q) {
-      const remain = Math.max(0, q.at - performance.now());
-      q.el.style.left = (12 + (remain / q.total) * 68) + "%";   // slides toward the spark
+      const r = Math.max(0, q.at - performance.now()) / q.total;
+      // r^0.6: starts slow, then accelerates into the spark — urgency you can read at a glance
+      q.el.style.left = (9 + Math.pow(r, 0.6) * 80) + "%";
+      q.el.classList.toggle("danger", r < 0.25);
     }
-    removeFuseItem(q) { if (q.el) q.el.remove(); }
+    removeFuseItem(q) {
+      if (!q.el) return;
+      q.el.remove();
+      this.lane.classList.remove("hit"); void this.lane.offsetWidth; this.lane.classList.add("hit");
+    }
     setLaneHot(hot) { this.laneLabel.classList.toggle("hot", hot); }
     destroy() { this.root.remove(); }
   }
@@ -165,22 +207,26 @@
      Deck — one player's weapon economy
      ================================================================ */
   class Deck {
-    constructor(ui, opts) {  // {onLaunch(w, dxClient|null), onRich()}
+    constructor(ui, opts) {  // {onLaunch(w, dxClient|null, tier), onRich(), meter(), vent(tier)}
       this.ui = ui;
       this.onLaunch = opts.onLaunch;
       this.onRich = opts.onRich || (() => {});
+      this.meter = opts.meter;   // coins buy the attack; the board's TIFFED OFF meter powers it
+      this.vent = opts.vent;
       this.coins = START_COINS;
       this.comeback = false;
       this.burstMult = 1; this.burstUntil = 0;   // temporary income boost from landing combos
       this.cds = {};
       this.running = false;
-      this.attacksSent = 0;
+      this.bombRun = 0; this.bombRunUntil = 0;   // repeat fatigue
+      this.lastW = null;
+      this.pt = { attacks: 0, repeats: 0, tiers: [0, 0, 0, 0] };   // playtest counters
       this.richSent = false;
       this.btns = {};
       WEAPONS.forEach((w) => {
         const b = document.createElement("button");
         b.className = "wpn";
-        b.innerHTML = Assets.icon(w.icon, 26) + '<span class="wn">' + w.n + '</span><span class="wc">$' + w.cost + '</span><div class="cdover" style="height:0"></div>';
+        b.innerHTML = '<span class="wt"></span>' + Assets.icon(w.icon, 26) + '<span class="wn">' + w.n + '</span><span class="wc">$' + w.cost + '</span><div class="cdover" style="height:0"></div>';
         ui.weaponRow.appendChild(b);
         this.btns[w.id] = b;
         this.bindButton(b, w);
@@ -222,7 +268,7 @@
         b.classList.remove("aiming");
         const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
         start = null;
-        const flicked = w.aim && Math.hypot(dx, dy) > 26;
+        const flicked = w.aim && Math.hypot(dx, dy) > WEAPON_AIM_DRAG_THRESHOLD;
         this.tryFire(w, flicked ? dx : null);
       };
       b.addEventListener("pointerup", end);
@@ -233,16 +279,33 @@
     stop() { this.running = false; clearInterval(this._iv); }
     addCoins(n) { this.coins += n; }
 
+    priceOf(w) {
+      if (w.id !== "bomb" || performance.now() > this.bombRunUntil) return w.cost;
+      return BOMB_FATIGUE_PRICES[Math.min(this.bombRun, BOMB_FATIGUE_PRICES.length - 1)];
+    }
+
     tryFire(w, dxClient) {
       if (!this.running) return;
       const now = performance.now();
+      const price = this.priceOf(w);
       if ((this.cds[w.id] || 0) > now) { SFX.deny(); return; }
-      if (this.coins < w.cost) { SFX.deny(); this.ui.announce('<span class="warn">NOT ENOUGH CASH</span>', 900); return; }
-      this.coins -= w.cost;
+      if (this.coins < price) { SFX.deny(); this.ui.announce('<span class="warn">NOT ENOUGH CASH</span>', 900); return; }
+      this.coins -= price;
       this.cds[w.id] = now + w.cd;
-      this.attacksSent++;
+      // the attack is as strong as your current heat, and firing it vents that heat
+      const tier = tierOf(this.meter());
+      this.vent(tier);
+      if (w.id === "bomb") {
+        this.bombRun = now > this.bombRunUntil ? 1 : this.bombRun + 1;
+        this.bombRunUntil = now + BOMB_FATIGUE_MS;
+      } else this.bombRun = 0;
+      this.pt.attacks++;
+      if (this.lastW === w.id) this.pt.repeats++;
+      this.pt.tiers[tier]++;
+      this.lastW = w.id;
       SFX.send();
-      this.onLaunch(w.id, dxClient);
+      if (tier) this.ui.announce('<span class="warn">' + (tier === 3 ? "TIFFED OFF " : TIER_NAMES[tier] + " ") + w.n + "!</span>", 1000);
+      this.onLaunch(w.id, dxClient, tier);
       this.refresh();
     }
 
@@ -259,12 +322,173 @@
 
     refresh() {
       const now = performance.now();
+      const tier = tierOf(this.meter());
       WEAPONS.forEach((w) => {
         const b = this.btns[w.id];
         const cdLeft = Math.max(0, (this.cds[w.id] || 0) - now);
-        b.classList.toggle("cant", this.coins < w.cost || cdLeft > 0);
+        const price = this.priceOf(w);
+        b.classList.toggle("cant", this.coins < price || cdLeft > 0);
         b.querySelector(".cdover").style.height = cdLeft > 0 ? (cdLeft / w.cd * 100).toFixed(0) + "%" : "0";
+        if (b._price !== price) {
+          b._price = price;
+          b.querySelector(".wc").textContent = "$" + price;
+          b.classList.toggle("tired", price > w.cost);
+        }
+        if (b._tier !== tier) {
+          b._tier = tier;
+          b.dataset.tier = tier;
+          b.querySelector(".wt").textContent = tier === 3 ? "TIFFED!" : TIER_NAMES[tier];
+        }
       });
+    }
+  }
+
+  function dodgeLine(name, w, tier) {
+    const n = esc(name.toUpperCase());
+    return w === "trap" ? n + " DIDN'T FALL FOR IT" : n + " SURVIVED YOUR " + tierWord(tier) + WEAPON_NAMES[w];
+  }
+
+  // everything a finished board reports: arena skill stats + deck economy + playtest counters
+  function boardStats(board) {
+    const a = board.arena.stats, d = board.deck;
+    const s = Object.assign({}, a, {
+      meterAvg: a.meterTime ? Math.round(a.meterIntegral / a.meterTime) : 0,
+      meterPeak: Math.round(a.meterPeak),
+    });
+    delete s.meterIntegral; delete s.meterTime;
+    if (d) Object.assign(s, { attacks: d.pt.attacks, repeats: d.pt.repeats, tiers: d.pt.tiers.slice(), endCoins: Math.floor(d.coins) });
+    return s;
+  }
+
+  // one line per player on the results card for the TIFFED OFF playtest questions
+  function playtestLine(st) {
+    if (!st || st.meterPeak === undefined) return "";
+    const t = st.tiers || [0, 0, 0, 0];
+    return "TIFFED OFF avg " + st.meterAvg + "% · peak " + st.meterPeak + "% · maxed " + (st.maxed || 0) + "× · " +
+      (st.cleanCombos || 0) + " clean · sent " + t[0] + "/" + t[1] + "/" + t[2] + "/" + t[3] + " (norm/heat/fume/max) · ended $" + (st.endCoins || 0);
+  }
+
+  function logPlaytest(entry) {
+    try {
+      const log = JSON.parse(Store.get("ss_playtest") || "[]");
+      log.push(entry);
+      while (log.length > PLAYTEST_LOG_MAX) log.shift();
+      Store.set("ss_playtest", JSON.stringify(log));
+    } catch (e) {}
+  }
+
+  /* ================================================================
+     Bot — the GOD BOT opponent for practice/test mode. It speaks the same
+     messages a remote phone does (atk / st / hurt / trapped / dodge / end), so
+     solo runs the real PvP code path — just with no network and no bot board.
+     ================================================================ */
+  const BOT_NAME = "GOD BOT";
+  // chance an attack you send actually gets the bot, per tier — it's god-tier, but a
+  // maxed signature should still land sometimes
+  const BOT_FAIL = {
+    bomb: [0.05, 0.1, 0.15, 0.3], trap: [0.1, 0.15, 0.2, 0.35],
+    flood: [0.08, 0.12, 0.2, 0.35], gust: [0.08, 0.12, 0.18, 0.3],
+  };
+  const BOT_TIER_ODDS = [0.25, 0.3, 0.25, 0.2];   // so every tier of every weapon shows up on your board
+  const BOT_RESOLVE_MS = 1800;                     // how long after landing the bot "deals with" your attack
+
+  class Bot {
+    constructor(match) {
+      this.match = match;
+      this.score = 0; this.hearts = HEARTS; this.meter = 0; this.coins = START_COINS;
+      this.attacking = true;
+      this.plan = null; this.nextAtk = 0; this.lastSt = 0;
+      this.running = false; this.ended = false;
+      this.pt = { attacks: 0, tiers: [0, 0, 0, 0], combos: 0 };
+      this.timeouts = new Set();
+    }
+    start() {
+      this.running = true;
+      this.t0 = this._last = performance.now();
+      this.nextAtk = this.t0 + rand(3000, 5000);
+      this._iv = setInterval(() => this.tick(), 100);
+    }
+    stop() { this.running = false; clearInterval(this._iv); this.timeouts.forEach(clearTimeout); }
+    later(fn, ms) {
+      const to = setTimeout(() => { this.timeouts.delete(to); if (this.running) fn(); }, ms);
+      this.timeouts.add(to);
+    }
+    // bot → you: delivered async, like the network, so message ordering matches online play
+    send(m) { setTimeout(() => this.match.onNet(m), 0); }
+
+    tick() {
+      const now = performance.now(), dt = (now - this._last) / 1000;
+      this._last = now;
+      const prog = Math.min(1, (now - this.t0) / ROUND_MS);
+      // god-tier slicing: PERFECT-heavy scoring that speeds up with the match, plus big combos
+      // (~500 over a full match — a very good human lands around 300-400)
+      this.score += (2.5 + 2 * prog) * dt;
+      if (Math.random() < dt * 0.08) { this.score += 25; this.pt.combos++; }
+      this.meter = Math.min(100, this.meter + (7 + 3 * prog) * dt);
+      this.coins += (7 + 3 * prog) * dt;   // richer than a human, so you see plenty of attacks
+      if (this.attacking && now >= this.nextAtk) {
+        if (!this.plan) {
+          const r = Math.random();
+          let tier = 0, acc = 0;
+          BOT_TIER_ODDS.forEach((p, i) => { acc += p; if (r >= acc) tier = i + 1; });
+          this.plan = { w: WEAPONS[(Math.random() * WEAPONS.length) | 0], tier: Math.min(3, tier) };
+        }
+        const { w, tier } = this.plan;
+        if (tierOf(this.meter) >= tier && this.coins >= w.cost) this.fire(w, tier, prog);
+      }
+      if (now - this.lastSt > 500) {
+        this.lastSt = now;
+        this.send({ t: "st", score: Math.floor(this.score), hearts: this.hearts, tier: tierOf(this.meter) });
+      }
+    }
+
+    fire(w, tier, prog) {
+      this.coins -= w.cost;
+      this.meter = Math.max(0, this.meter - TIER_VENT[tier]);
+      this.pt.attacks++; this.pt.tiers[tier]++;
+      const [fMin, fMax] = w.id === "bomb" && tier < 3 ? [BOMB_FUSE_MIN, BOMB_FUSE_MAX] : [FUSE_MIN, FUSE_MAX];
+      this.send({ t: "atk", w: w.id, aimX: Math.round(rand(150, 850)), delay: Math.round(rand(fMin, fMax)), tier });
+      this.plan = null;
+      this.nextAtk = performance.now() + rand(2500, 5000) * (1 - 0.4 * prog);
+    }
+
+    // you → bot
+    receive(m) {
+      if (m.t === "atk") this.later(() => this.resolveAttack(m.w, m.tier | 0), m.delay + BOT_RESOLVE_MS);
+      else if (m.t === "hurt") this.coins += HEART_BOUNTY;
+      else if (m.t === "trapped") this.coins += m.stolen;
+      else if (m.t === "end") this.end("time");
+    }
+
+    resolveAttack(w, tier) {
+      if (Math.random() >= BOT_FAIL[w][tier]) {
+        this.meter = Math.min(100, this.meter + (w === "bomb" && tier < 2 ? 4 : tier >= 2 ? 12 : 8));
+        if (!(w === "bomb" && tier < 2)) this.send({ t: "dodge", w, tier });
+        return;
+      }
+      this.meter = Math.max(0, this.meter - (w === "trap" ? 12 : 20));
+      if (w === "trap") {
+        const stolen = Math.round(this.coins * TRAP_STEAL_PCT);
+        this.coins -= stolen;
+        this.score = Math.max(0, this.score - 30);
+        this.send({ t: "trapped", stolen });
+        return;
+      }
+      this.hearts--;
+      this.score = Math.max(0, this.score - HEART_PENALTY[HEARTS - this.hearts - 1]);
+      this.send({ t: "hurt", hearts: this.hearts });
+      if (this.hearts <= 0) this.end("ko");
+    }
+
+    end(reason) {
+      if (this.ended) return;
+      this.ended = true;
+      const score = Math.floor(this.score), fruit = Math.round(score / 7);
+      this.send({
+        t: "end", score, reason,
+        stats: { fruit, perfects: Math.round(fruit * 0.8), bestCombo: this.pt.combos ? 5 : 0, bombsDodged: 0, dudsDefused: 0, attacks: this.pt.attacks },
+      });
+      this.stop();
     }
   }
 
@@ -277,28 +501,30 @@
       this.over = false;
       this.boards = [];
       this.results = {};                 // name -> {score, reason, stats}
-      this.themState = { score: 0, hearts: HEARTS };
+      this.themState = { score: 0, hearts: HEARTS, tier: 0 };
       $("boards").innerHTML = "";
       show("screen-game");
 
+      // solo = practice/test mode vs the GOD BOT, which stands in for a remote phone
+      this.bot = mode === "solo" ? new Bot(this) : null;
+      this.test = { lock: -1, free: false, mirror: false };
       if (mode === "couch") {
         this.boards.push(this.makeBoard({ name: S.p2Name, rot: true }));
         this.boards.push(this.makeBoard({ name: S.myName, rot: false }));
-      } else if (mode === "solo") {
-        this.boards.push(this.makeBoard({
-          name: S.myName, solo: true, noDeck: true, endless: true,
-          onEndRun: () => { const b = this.boards[0]; if (!this.over && b.arena.running) b.arena.endRound("stopped"); },
-        }));
       } else {
-        this.boards.push(this.makeBoard({ name: S.myName, solo: true }));
+        this.boards.push(this.makeBoard({ name: S.myName, solo: true, testBar: !!this.bot }));
       }
       // the first board is measured before the second reflows the column — re-measure both
       requestAnimationFrame(() => this.boards.forEach((b) => b.arena.resize()));
-      if (mode !== "solo") this._qiv = setInterval(() => this.tickQueues(), 100);
-      if (mode === "online") {
+      this._qiv = setInterval(() => this.tickQueues(), 100);
+      if (this.bot) {
+        this.wireTestBar(this.boards[0]);
+        this._tiv = setInterval(() => this.applyTest(this.boards[0]), 100);
+      }
+      if (mode !== "couch") {
         this._stiv = setInterval(() => {
           const b = this.boards[0];
-          Net.send({ t: "st", score: b.arena.score, hearts: b.arena.hearts });
+          this.send({ t: "st", score: b.arena.score, hearts: b.arena.hearts, tier: b.arena.tier() });
           // comeback aid when clearly behind
           b.deck.comeback = this.themState.score - b.arena.score > 120 || this.themState.hearts - b.arena.hearts >= 2;
         }, 500);
@@ -317,25 +543,53 @@
       const board = { ui, name: opts.name, queue: [], timeouts: new Set() };
       board.arena = new Arena(ui.canvas, {
         rotated: opts.rot,
-        endless: opts.endless,
-        onCoin: (n) => { if (board.deck) board.deck.addCoins(n); },
-        onBurst: (n) => { if (board.deck) board.deck.triggerBurst(n); },
+        onCoin: (n) => board.deck.addCoins(n),
+        onBurst: (n) => board.deck.triggerBurst(n),
         onEvent: (m) => this.onArenaEvent(board, m),
         onState: (st) => this.onArenaState(board, st),
       });
-      if (!opts.noDeck) {
-        board.deck = new Deck(ui, {
-          onLaunch: (w, dxClient) => this.launch(board, w, dxClient),
-          onRich: () => {
-            if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " IS SITTING ON $100+", 1800);
-            else Net.send({ t: "rich" });
-          },
-        });
-      }
+      board.deck = new Deck(ui, {
+        meter: () => board.arena.meter,
+        vent: (tier) => { board.arena.vent(tier); this.applyTest(board); },   // a meter lock survives rapid fire
+        onLaunch: (w, dxClient, tier) => this.launch(board, w, dxClient, tier),
+        onRich: () => {
+          if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " IS SITTING ON $100+", 1800);
+          else this.send({ t: "rich" });
+        },
+      });
       return board;
     }
 
     otherBoard(board) { return this.boards.find((b) => b !== board); }
+
+    // to the other player: over the network, or straight to the bot in practice
+    send(m) { if (this.bot) this.bot.receive(m); else Net.send(m); }
+
+    /* ----- practice/test controls ----- */
+    wireTestBar(board) {
+      const bar = board.ui.testBar;
+      const LOCKS = [-1, 0, 40, 70, 100], LOCK_NAMES = ["LIVE", "NORMAL", "HEATED", "FUMING", "MAX"];
+      const paint = () => {
+        bar.lock.textContent = "METER: " + LOCK_NAMES[LOCKS.indexOf(this.test.lock)];
+        bar.lock.classList.toggle("on", this.test.lock >= 0);
+        bar.free.classList.toggle("on", this.test.free);
+        bar.mirror.classList.toggle("on", this.test.mirror);
+        bar.bot.classList.toggle("on", this.bot.attacking);
+        bar.bot.textContent = "BOT ATK: " + (this.bot.attacking ? "ON" : "OFF");
+      };
+      bar.lock.onclick = () => { this.test.lock = LOCKS[(LOCKS.indexOf(this.test.lock) + 1) % LOCKS.length]; paint(); };
+      bar.free.onclick = () => { this.test.free = !this.test.free; paint(); };
+      bar.mirror.onclick = () => { this.test.mirror = !this.test.mirror; paint(); };
+      bar.bot.onclick = () => { this.bot.attacking = !this.bot.attacking; paint(); };
+      paint();
+    }
+    // re-pinned every 100ms, so the vent after firing refills right away and you can
+    // fire the same tier over and over
+    applyTest(board) {
+      if (!board.arena.running) return;
+      if (this.test.lock >= 0) { board.arena.meter = this.test.lock; board.arena.lastSkillT = performance.now(); }
+      if (this.test.free) { board.deck.coins = Math.max(board.deck.coins, 999); board.deck.cds = {}; board.deck.bombRun = 0; }
+    }
 
     /* ----- attacks ----- */
     aimFrom(board, dxClient) {
@@ -345,20 +599,22 @@
       return Math.round(Math.max(80, Math.min(920, 500 + dir * perceived * 4)));
     }
 
-    launch(board, w, dxClient) {
+    launch(board, w, dxClient, tier) {
       const aimX = this.aimFrom(board, dxClient);
-      const [fMin, fMax] = w === "bomb" ? [BOMB_FUSE_MIN, BOMB_FUSE_MAX] : [FUSE_MIN, FUSE_MAX];
+      const [fMin, fMax] = w === "bomb" && tier < 3 ? [BOMB_FUSE_MIN, BOMB_FUSE_MAX] : [FUSE_MIN, FUSE_MAX];
       const delay = Math.round(rand(fMin, fMax));
-      if (this.mode === "couch") this.deliver(this.otherBoard(board), board.name, w, aimX, delay);
-      else Net.send({ t: "atk", w, aimX, delay });
+      if (this.test.mirror) this.deliver(board, board.name, w, aimX, delay, tier);   // HIT ME: preview it on yourself
+      else if (this.mode === "couch") this.deliver(this.otherBoard(board), board.name, w, aimX, delay, tier);
+      else this.send({ t: "atk", w, aimX, delay, tier });
     }
 
-    deliver(victim, fromName, w, aimX, delay) {
+    deliver(victim, fromName, w, aimX, delay, tier) {
       if (this.over) return;
-      if (!SILENT_ATTACKS[w]) {
-        victim.ui.announce('<span class="warn">INCOMING!</span> ' + ANNOUNCE[w](esc(fromName)));
+      tier = tier | 0;
+      if (!isSilent(w, tier)) {
+        victim.ui.announce('<span class="warn">INCOMING!</span> ' + ANNOUNCE[w](esc(fromName.toUpperCase()), tier));
       }
-      const q = { w, at: performance.now() + delay, total: delay };
+      const q = { w, tier, at: performance.now() + delay, total: delay };
       victim.queue.push(q);
       victim.ui.addFuseItem(q);
       SFX.tick();
@@ -366,7 +622,7 @@
         victim.timeouts.delete(to);
         victim.queue = victim.queue.filter((x) => x !== q);
         victim.ui.removeFuseItem(q);
-        if (!this.over) victim.arena.handleSend(w, aimX);
+        if (!this.over) victim.arena.handleSend(w, aimX, tier, fromName);
       }, delay);
       victim.timeouts.add(to);
     }
@@ -380,16 +636,12 @@
 
     /* ----- arena events ----- */
     onArenaEvent(board, m) {
-      if (this.mode === "solo") {
-        if (m.t === "end") this.finishSolo(board, m.score, m.reason);
-        return;   // no opponent to notify of hurts/traps/combos in free play
-      }
       if (m.t === "hurt") {
         if (this.mode === "couch") {
           const other = this.otherBoard(board);
           other.deck.addCoins(HEART_BOUNTY);
-          other.ui.announce("DIRECT HIT! +$" + HEART_BOUNTY, 1600);
-        } else Net.send({ t: "hurt", hearts: m.hearts });
+          other.ui.announce("YOU GOT " + esc(board.name.toUpperCase()) + "! +$" + HEART_BOUNTY, 1600);
+        } else this.send({ t: "hurt", hearts: m.hearts });
       } else if (m.t === "trap") {
         // the steal itself happens here (main.js owns the Deck) — Arena only told us
         // it happened and where, so the popup lands at the right spot on the victim's board
@@ -402,41 +654,50 @@
           other.deck.addCoins(stolen);
           other.ui.announce(esc(board.name) + " FELL FOR THE FAKE — STOLE $" + stolen, 1800);
         } else {
-          Net.send({ t: "trapped", stolen });
+          this.send({ t: "trapped", stolen });
         }
       } else if (m.t === "combo") {
         if (m.n >= 5) {
           if (this.mode === "couch") this.otherBoard(board).ui.announce(esc(board.name) + " ×" + m.n + " COMBO?!", 1600);
-          else Net.send({ t: "combo", n: m.n });
+          else this.send({ t: "combo", n: m.n });
         }
+      } else if (m.t === "dodge") {
+        // tell the sender their attack got read — the opponent should feel present both ways
+        if (m.w === "bomb" && m.tier < 2) return;
+        if (this.mode === "couch") this.otherBoard(board).ui.announce(dodgeLine(board.name, m.w, m.tier), 1600);
+        else this.send({ t: "dodge", w: m.w, tier: m.tier });
+      } else if (m.t === "phase") {
+        board.ui.announce('<span class="warn">' + m.name + "!</span>", 1400);
+        if (board === this.boards[this.boards.length - 1]) SFX.phase();
       } else if (m.t === "end") {
-        const stats = Object.assign({}, board.arena.stats, { attacks: board.deck.attacksSent });
+        const stats = boardStats(board);
         this.results[board.name] = { score: m.score, reason: m.reason, stats };
-        if (this.mode === "online") Net.send({ t: "end", score: m.score, reason: m.reason, stats });
+        if (this.mode !== "couch") this.send({ t: "end", score: m.score, reason: m.reason, stats });
         this.checkOver(board, m.reason);
       }
     }
 
     onArenaState(board, st) {
       board.ui.setMe(board.name, st.hearts, st.score);
-      if (this.mode === "solo") { board.ui.setElapsed(st.elapsed); return; }
-      board.ui.setTimer(st.left, st.dur);
+      board.ui.setMeter(st.meter, st.tier, st.streak);
+      board.ui.setTimer(st.left);
       if (this.mode === "couch") {
         const other = this.otherBoard(board);
-        board.ui.setThem(other.name, other.arena.hearts, other.arena.score);
+        board.ui.setThem(other.name, other.arena.hearts, other.arena.score, other.arena.tier());
       } else {
-        board.ui.setThem(S.theirName, this.themState.hearts, this.themState.score);
+        board.ui.setThem(S.theirName, this.themState.hearts, this.themState.score, this.themState.tier);
       }
     }
 
     /* ----- remote messages ----- */
     onNet(m) {
       const me = this.boards[0];
-      if (m.t === "atk") this.deliver(me, S.theirName, m.w, m.aimX, m.delay);
+      if (m.t === "atk") this.deliver(me, S.theirName, m.w, m.aimX, m.delay, m.tier);
+      else if (m.t === "dodge") me.ui.announce(dodgeLine(S.theirName, m.w, m.tier), 1600);
       else if (m.t === "hurt") {
         this.themState.hearts = m.hearts;
         me.deck.addCoins(HEART_BOUNTY);
-        me.ui.announce("DIRECT HIT! +$" + HEART_BOUNTY, 1600);
+        me.ui.announce("YOU GOT " + esc(S.theirName.toUpperCase()) + "! +$" + HEART_BOUNTY, 1600);
       }
       else if (m.t === "trapped") {
         me.deck.addCoins(m.stolen);
@@ -444,7 +705,7 @@
       }
       else if (m.t === "combo") me.ui.announce(esc(S.theirName) + " ×" + m.n + " COMBO?!", 1600);
       else if (m.t === "rich") me.ui.announce(esc(S.theirName) + " IS SITTING ON $100+", 1800);
-      else if (m.t === "st") { this.themState.score = m.score; this.themState.hearts = m.hearts; }
+      else if (m.t === "st") { this.themState.score = m.score; this.themState.hearts = m.hearts; this.themState.tier = m.tier | 0; }
       else if (m.t === "end") {
         this.results[S.theirName] = { score: m.score, reason: m.reason, stats: m.stats };
         this.checkOver(null, m.reason);
@@ -453,18 +714,16 @@
 
     /* ----- start & finish ----- */
     countdownThenStart() {
-      if (this.mode === "solo") this.boards[0].ui.announce("FREE PLAY — GO!", 1800);
-      else {
-        const vs = this.mode === "couch" ? [S.myName, S.p2Name] : [S.myName, S.theirName];
-        this.boards.forEach((b) => b.ui.announce(esc(vs[0].toUpperCase()) + " ⚔ " + esc(vs[1].toUpperCase()), 2600));
-      }
+      const vs = this.mode === "couch" ? [S.myName, S.p2Name] : [S.myName, S.theirName];
+      this.boards.forEach((b) => b.ui.announce(esc(vs[0].toUpperCase()) + " ⚔ " + esc(vs[1].toUpperCase()), 2600));
       const step = (k) => {
         if (this.over) return;
         if (k === 0) {
           this.boards.forEach((b) => b.ui.countdown("SLICE!"));
           SFX.combo(4);
           setTimeout(() => this.boards.forEach((b) => b.ui.countdown(null)), 500);
-          this.boards.forEach((b) => { b.arena.resize(); b.arena.startRound(ROUND_MS); if (b.deck) b.deck.start(); });
+          this.boards.forEach((b) => { b.arena.resize(); b.arena.startRound(ROUND_MS); b.deck.start(); });
+          if (this.bot) this.bot.start();
           return;
         }
         this.boards.forEach((b) => b.ui.countdown(k));
@@ -487,7 +746,7 @@
           this.results[winner] = {
             score: wb ? wb.arena.score : this.themState.score,
             reason: "alive",
-            stats: wb ? Object.assign({}, wb.arena.stats, { attacks: wb.deck.attacksSent }) : null,
+            stats: wb ? boardStats(wb) : null,
           };
         }
         this.finish({ winner, loser, ko: true });
@@ -497,7 +756,7 @@
         const [a, b] = names;
         const sa = this.results[a].score, sb = this.results[b].score;
         this.finish(sa === sb ? { tie: true } : { winner: sa > sb ? a : b, loser: sa > sb ? b : a, ko: false });
-      } else if (this.mode === "online") {
+      } else if (this.mode !== "couch") {
         setTimeout(() => {
           if (this.over) return;
           if (!this.results[S.theirName]) this.results[S.theirName] = { score: this.themState.score, reason: "time" };
@@ -520,9 +779,12 @@
       $("results-stats").innerHTML = names.map((n) => {
         const st = (this.results[n] || {}).stats;
         if (!st) return "";
-        return esc(n) + " — " + st.fruit + " fruit · " + (st.perfects || 0) + " perfect · best ×" + (st.bestCombo || 0) + " · dodged " + st.bombsDodged + " · " + (st.dudsDefused || 0) + " defused · sent " + (st.attacks || 0);
+        const pl = playtestLine(st);
+        return "<b>" + esc(n) + "</b> — " + st.fruit + " fruit · " + (st.perfects || 0) + " perfect · best ×" + (st.bestCombo || 0) + " · dodged " + st.bombsDodged + " · " + (st.dudsDefused || 0) + " defused · sent " + (st.attacks || 0) +
+          (pl ? '<br><span class="pt">' + pl + "</span>" : "");
       }).filter(Boolean).join("<br>");
-      $("results-h2h").textContent = outcome.tie ? "" : this.recordWin(outcome.winner, outcome.loser);
+      if (!this.bot) this.logResult(outcome, names);
+      $("results-h2h").textContent = outcome.tie || this.bot ? "" : this.recordWin(outcome.winner, outcome.loser);
       $("btn-rematch").disabled = false;
       $("results-status").textContent = "";
       S.myReady = S.theirReady = false;
@@ -531,21 +793,15 @@
       show("screen-results");
     }
 
-    finishSolo(board, score, reason) {
-      this.over = true;
-      this.stop();
-      const prevBest = parseInt(Store.get("ss_solo_best") || "0", 10);
-      const isBest = score > prevBest;
-      if (isBest) Store.set("ss_solo_best", String(score));
-      $("results-title").textContent = reason === "ko" ? "KO'D!" : "RUN OVER";
-      $("results-lines").innerHTML = "Score: <b>" + score + "</b>" + (isBest ? " — NEW BEST! 🎉" : " · best " + Math.max(prevBest, score));
-      const st = board.arena.stats;
-      $("results-stats").innerHTML = st.fruit + " fruit · " + st.perfects + " perfect · best ×" + st.bestCombo + " · " + st.bombsDodged + " bombs dodged · " + st.dudsDefused + " defused";
-      $("results-h2h").textContent = "";
-      $("btn-rematch").disabled = false;
-      $("results-status").textContent = "";
-      if (isBest) SFX.fanfare(); else SFX.tick();
-      show("screen-results");
+    // bot practice is never logged — it would skew the playtest data and the head-to-head
+    logResult(outcome, names) {
+      const players = {};
+      names.forEach((n) => { const r = this.results[n]; if (r) players[n] = Object.assign({ score: r.score }, r.stats || {}); });
+      const ra = this.results[outcome.winner], rb = this.results[outcome.loser];
+      logPlaytest({
+        at: new Date().toISOString(), mode: this.mode, winner: outcome.winner || null, ko: !!outcome.ko,
+        margin: outcome.tie ? 0 : ra && rb ? ra.score - rb.score : null, players,
+      });
     }
 
     recordWin(winner, loser) {
@@ -562,10 +818,11 @@
     }
 
     stop() {
-      clearInterval(this._qiv); clearInterval(this._stiv);
+      clearInterval(this._qiv); clearInterval(this._stiv); clearInterval(this._tiv);
+      if (this.bot) this.bot.stop();
       this.boards.forEach((b) => {
         b.arena.stopRound(); b.arena.destroy();
-        if (b.deck) b.deck.stop();
+        b.deck.stop();
         b.timeouts.forEach(clearTimeout);
       });
     }
@@ -588,7 +845,7 @@
   };
   $("btn-couch").onclick = () => { Store.set("ss_name", myName()); show("screen-couch"); };
   $("btn-solo").onclick = () => {
-    S.mode = "solo"; S.isHost = true; S.myName = myName();
+    S.mode = "solo"; S.isHost = true; S.myName = myName(); S.theirName = BOT_NAME;
     Store.set("ss_name", S.myName);
     startMatch();
   };
@@ -608,7 +865,7 @@
     Net.on("lobbyok", () => { if (!S.isHost && !(S.match && !S.match.over)) enterLobby(); });
     Net.on("start", () => startMatch());
     Net.on("ready", () => { S.theirReady = true; maybeRematch(); });
-    ["atk", "hurt", "trapped", "combo", "rich", "st", "end"].forEach((t) =>
+    ["atk", "hurt", "trapped", "combo", "rich", "st", "end", "dodge"].forEach((t) =>
       Net.on(t, (m) => { if (S.match) S.match.onNet(m); })
     );
     Net.onClose = () => {
@@ -729,5 +986,15 @@
 
   $("join-code").addEventListener("input", (e) => { e.target.value = e.target.value.toUpperCase(); });
 
+  // playtest log: every PvP match appends a record (see logPlaytest) — copy it out to share
+  function playtestLog() { try { return JSON.parse(Store.get("ss_playtest") || "[]"); } catch (e) { return []; } }
+  $("btn-copylog").onclick = () => {
+    const text = JSON.stringify(playtestLog(), null, 1);
+    const done = () => toast("Playtest log copied (" + playtestLog().length + " matches)");
+    try { navigator.clipboard.writeText(text).then(done, () => { console.log(text); toast("Couldn’t copy — log printed to console"); }); }
+    catch (e) { console.log(text); toast("Couldn’t copy — log printed to console"); }
+  };
+
   window.__SS = S; // debug handle
+  S.playtestLog = playtestLog;
 })();

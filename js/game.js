@@ -7,7 +7,6 @@
 (function () {
   const W = 1000, G = 1450;                      // world width units, gravity px/s^2
   const ROUND_MS = 90000;
-  const ESCALATE_MS = 90000;                      // endless/solo boards ramp on this fixed clock, then hold
   const HEARTS = 3;
   const SLICE_SPEED = 0.55;                      // min world px/ms to cut
   const FRUIT_SCORE = 5, FRUIT_COIN = 4;
@@ -23,9 +22,35 @@
   const BOMB_BLAST = 260;
   const NATURAL_BOMB_CHANCE = [0.02, 0.16];      // [early, late] — ambient Fruit-Ninja-style risk, independent of attacks
   const DUD_CHANCE = 0.2;                         // ~1 in 5 ambient bombs is a dud — tap (don't swipe) to defuse for a bonus
-  const DUD_SCORE = 10, DUD_COIN = 15;
-  const TAP_MAX_MS = 220, TAP_MAX_DIST = 26;      // a touch this short/still is a tap, not a swipe
-  const GUST_CHAOS_MS = 10000;                    // fruit/bombs can enter from any edge for this long — apexes get hard to read
+  const DUD_SCORE = 10, DUD_COIN = 15, DUD_FIZZLE_PENALTY = 10;   // swiping a dud now costs you — tap it instead
+  const TAP_MAX_MS = 220;
+  const DUD_TAP_MOVE_TOLERANCE = 26;              // a touch this short/still is a tap, not a swipe (tuned separately from weapon aim)
+  const BERRY_COIN = 8, BERRY_PERFECT_COIN = 12;  // the TIFF BERRY: a real strawberry is a high-value target… if it's real
+  const GUST_CHAOS_MS = [10000, 10000, 11000, 8000];   // per tier — the signature is shorter but far denser
+  const GUST_SHOVE = [140, 180, 220, 260];        // immediate sideways WHOOSH on everything already airborne
+  const GUST_BOOST = [0, 0.15, 0.3, 0.6];         // extra spawn chance per tick while the gust blows
+
+  /* ---------- TIFFED OFF: the one skill meter ----------
+     Coins buy the attack; skill powers it. Only quality play builds the meter
+     (GREAT/PERFECT, CLEAN combos, duds, clean defense); mistakes vent it and break
+     the hidden streak; idling decays it. Attacking vents it by tier.
+     All values are playtest placeholders. */
+  const METER = {
+    great: 2, perfect: 5, perfectBerry: 8,
+    clean: { 3: 4, 4: 7 }, cleanMax: 10,          // CLEAN ×5+ => cleanMax
+    dud: 8,
+    dodgeBomb: 4, dodgeMajor: 8, dodgeFuming: 12, // surviving a sent attack without getting hit
+    miss: 4, bomb: 20, fake: 12, fizzle: 6,       // losses (each also breaks the streak)
+  };
+  const METER_GRACE_MS = 2500, METER_DECAY_PER_S = 2.5;
+  const STREAK_STEPS = [3, 7, 12];                // consecutive skill events => hidden gain multiplier
+  const STREAK_MULT = [1, 1.25, 1.5, 1.75];
+  const TIER_AT = [0, 40, 70, 100];
+  const TIER_VENT = [0, 20, 33, 100];             // the 100% signature consumes the whole meter
+  const TIER_NAMES = ["", "HEATED", "FUMING", "TIFFED OFF"];
+  const WEAPON_NAMES = { bomb: "BOMB", trap: "FAKE", flood: "RUSH", gust: "GUST" };
+  const tierOf = (m) => (m >= TIER_AT[3] ? 3 : m >= TIER_AT[2] ? 2 : m >= TIER_AT[1] ? 1 : 0);
+  const PHASES = [{ at: 30000, name: "SABOTAGE" }, { at: 60000, name: "SURVIVE" }];
 
   const FRUITS = [
     { k: "apple",  spr: "apple",  juice: "#e5254f", r: 66 },
@@ -39,8 +64,8 @@
   const KINDS = {};
   FRUITS.forEach((f) => (KINDS[f.k] = f));
   KINDS.bomb = { k: "bomb", spr: "bomb",  juice: "#5a5566", r: 66 };
-  KINDS.trap = { k: "trap", spr: "straw", juice: "#8c46c8", r: 58 }; // the fake strawberry
-  KINDS.dud  = { k: "dud",  spr: "bomb",  juice: "#5a5566", r: 66 }; // looks identical to a bomb — tell is a green glint
+  KINDS.trap = { k: "trap", spr: "straw", juice: "#8c46c8", r: 58 }; // a fake — each one is disguised as some fruit (disguise)
+  KINDS.dud  = { k: "dud",  spr: "bomb",  juice: "#5a5566", r: 66 }; // bomb-shaped, but a green fuse + tap ripple — TAP it
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -71,7 +96,6 @@
       this.canvas = canvas;
       this.ctx = canvas.getContext("2d");
       this.rotated = !!opts.rotated;          // couch: top board is CSS-rotated 180°
-      this.endless = !!opts.endless;          // solo/free-play: no timer, ramps then holds at max intensity
       this.onEvent = opts.onEvent || (() => {});   // {t:'hurt'|'trap'|'end', ...}
       this.onState = opts.onState || (() => {});
       this.onCoin = opts.onCoin || (() => {});     // coins earned by slicing
@@ -83,12 +107,15 @@
       this.popups = [];
       this.trails = new Map(); // pointerId -> {pts:[], count, lastSlice, swished}
       this.score = 0; this.hearts = HEARTS;
-      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0, dudsDefused: 0 };
+      this.resetStats();
+      this.resetMeter();
       this.running = false;
       this.roundStart = 0; this.roundDur = ROUND_MS;
       this.nextNatural = 0; this.nextBurst = 0;
       this.nextId = 1;
-      this.shakeUntil = 0; this.flashUntil = 0; this.stampUntil = 0; this.windUntil = 0;
+      this.shakeUntil = 0; this.flashUntil = 0; this.stamp = null; this.windUntil = 0; this.windBoost = 0;
+      this.freezeUntil = 0; this.freezeSimT = 0; this.slashFlashUntil = 0;
+      this.phaseIdx = 0; this._lastLoopT = 0;
       this.lastState = 0;
       this._raf = 0;
       this._resize = this.resize.bind(this);
@@ -130,13 +157,65 @@
     now() { return performance.now(); }
     simT() { return this.now() - this.roundStart; }
 
+    resetStats() {
+      this.stats = {
+        fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0, dudsDefused: 0,
+        cleanCombos: 0, bombHits: 0, fakeHits: 0, dudFizzles: 0, attacksDodged: 0,
+        meterPeak: 0, maxed: 0, bestStreak: 0, meterIntegral: 0, meterTime: 0,
+      };
+    }
+
+    /* ---------- TIFFED OFF meter ---------- */
+    resetMeter() {
+      this.meter = 0; this.streak = 0; this.lastSkillT = 0;
+      this.groups = new Map(); this.nextGroup = 1; this.gustGroup = null;
+    }
+    tier() { return tierOf(this.meter); }
+    streakLevel() { let l = 0; STREAK_STEPS.forEach((n) => { if (this.streak >= n) l++; }); return l; }
+
+    // a skill event: bumps the hidden streak, which scales how fast the meter fills
+    gainMeter(base) {
+      if (!this.running) return;
+      this.streak++;
+      this.stats.bestStreak = Math.max(this.stats.bestStreak, this.streak);
+      const before = this.meter;
+      this.meter = Math.min(100, this.meter + base * STREAK_MULT[this.streakLevel()]);
+      this.lastSkillT = this.now();
+      this.meterMoved(before);
+    }
+    // a mistake vents meter and breaks the streak
+    loseMeter(n) {
+      this.streak = 0;
+      this.meter = Math.max(0, this.meter - n);
+    }
+    // attacking vents by tier — the streak survives, you earned that
+    vent(tier) {
+      this.meter = tier >= 3 ? 0 : Math.max(0, this.meter - TIER_VENT[tier]);
+    }
+    meterMoved(before) {
+      this.stats.meterPeak = Math.max(this.stats.meterPeak, this.meter);
+      const t0 = tierOf(before), t1 = tierOf(this.meter);
+      if (t1 <= t0) return;
+      if (t1 === 3) {
+        this.stats.maxed++;
+        this.stamp = { lines: ["TIFFED", "OFF!"], fill: "#e5254f", until: this.now() + 1400, dur: 1400 };
+        vib([20, 40, 20, 40, 30]);
+        SFX.maxed();
+      } else {
+        this.popups.push({ x: W / 2, y: this.H * 0.16, text: TIER_NAMES[t1] + "!", color: t1 === 2 ? "#e5254f" : "#f5920f", size: 48, born: this.now(), dur: 900 });
+        SFX.tierUp(t1);
+      }
+    }
+
     /* ---------- round control ---------- */
     startRound(dur) {
       this.entities = []; this.pieces = []; this.particles = [];
       this.popups = [];
       this.score = 0; this.hearts = HEARTS;
-      this.stats = { fruit: 0, bestCombo: 0, bombsDodged: 0, perfects: 0, dudsDefused: 0 };
-      this.windUntil = 0;
+      this.resetStats();
+      this.resetMeter();
+      this.windUntil = 0; this.windBoost = 0; this.stamp = null;
+      this.phaseIdx = 0; this._lastLoopT = 0;
       this.roundDur = dur || ROUND_MS;
       this.roundStart = this.now();
       this.nextNatural = 600;
@@ -153,7 +232,14 @@
     }
 
     /* ---------- spawning ---------- */
-    spawn(kind, x0, vx, apexFrac, delayMs, crit) {
+    // sprite + hit radius live on the entity, so a fake can wear any fruit's skin
+    decorate(e, disguise) {
+      const look = KINDS[disguise || e.kind];
+      e.spr = look.spr; e.r = look.r;
+      return e;
+    }
+
+    spawn(kind, x0, vx, apexFrac, delayMs, crit, disguise) {
       const y0 = this.H + 70;
       const apexY = clamp(apexFrac, 0.06, 0.6) * this.H;
       const vy = -Math.sqrt(2 * G * (y0 - apexY));
@@ -165,21 +251,53 @@
         t0: this.simT() + (delayMs || 0),
         alive: true,
       };
+      this.decorate(e, disguise);
       this.entities.push(e);
       return e;
     }
+
+    randomFruit() { return FRUITS[(Math.random() * FRUITS.length) | 0].k; }
+    ambientBomb() { return Math.random() < DUD_CHANCE ? "dud" : "bomb"; }
 
     spawnNatural(prog) {
       // ambient Fruit-Ninja-style risk: a fraction of "normal" spawns are just bombs,
       // independent of anything either player bought — rate climbs with the match arc.
       // A slice of those bombs are secretly duds (safe — tap to defuse for a bonus).
       const isBomb = Math.random() < lerp(NATURAL_BOMB_CHANCE[0], NATURAL_BOMB_CHANCE[1], prog);
-      const kind = isBomb ? (Math.random() < DUD_CHANCE ? "dud" : "bomb") : FRUITS[(Math.random() * FRUITS.length) | 0].k;
+      const kind = isBomb ? this.ambientBomb() : this.randomFruit();
       const crit = !isBomb && Math.random() < CRIT_CHANCE;
       if (this.windUntil && this.simT() < this.windUntil) { this.spawnChaos(kind, crit); return; }
       const x0 = rand(120, W - 120);
       const vx = (W / 2 - x0) * rand(0.08, 0.22) + rand(-60, 60);
       this.spawn(kind, x0, vx, rand(0.1, 0.36), 0, crit);
+    }
+
+    // authored skill patterns: small readable set pieces that reward precision and
+    // timing reads over raw swipe speed (they replace some of the random bursts)
+    spawnPattern(prog) {
+      const pick = ["sandwich", "timing", "crossing", "split"][(Math.random() * 4) | 0];
+      if (pick === "sandwich") {
+        // fruit / bomb / fruit, tight together — cut around the middle
+        const x = rand(260, 740), vx = rand(-40, 40), apex = rand(0.16, 0.3);
+        this.spawn(this.randomFruit(), x - 150, vx, apex, 0);
+        this.spawn(this.ambientBomb(), x, vx, apex, 0);
+        this.spawn(this.randomFruit(), x + 150, vx, apex, 0);
+      } else if (pick === "timing") {
+        // three fruit with offset apexes — PERFECT all three with three deliberate cuts
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        [0, 1, 2].forEach((i) => this.spawn(this.randomFruit(), 500 + dir * (i - 1) * 260, 0, 0.2, i * 380));
+      } else if (pick === "crossing") {
+        // two fruit crossing paths — read the trajectory, don't scribble
+        const apex = rand(0.18, 0.28);
+        this.spawn(this.randomFruit(), 170, 310, apex, 0);
+        this.spawn(this.randomFruit(), 830, -310, apex, 0);
+        if (prog > 0.35) this.spawn("bomb", 500, rand(-30, 30), apex + 0.1, 260);
+      } else {
+        // high / low split — two separate timed gestures
+        const left = Math.random() < 0.5;
+        this.spawn(this.randomFruit(), left ? 280 : 720, 0, 0.12, 0);
+        this.spawn(this.randomFruit(), left ? 720 : 280, 0, 0.48, 0);
+      }
     }
 
     // during a gust window, entries come from any of the 4 edges instead of always
@@ -207,35 +325,126 @@
         e.x0 = W + 70; e.y0 = rand(0.15, 0.75) * this.H;
         e.vx = -rand(520, 780); e.vy = -rand(260, 520);
       }
+      this.decorate(e);
       this.entities.push(e);
     }
 
-    handleSend(w, aimX) {
-      // an attack lands on THIS board (already fused/delayed by the queue)
+    // an attack lands on THIS board (already fused/delayed by the queue). Everything it
+    // spawns is tagged with a group, so surviving it cleanly can be rewarded (onGroupDone).
+    handleSend(w, aimX, tier, from) {
       if (!this.running) return;
+      tier = tier | 0;
       const ax = clamp(aimX || rand(150, W - 150), 80, W - 80);
+      const axc = clamp(ax, 290, W - 290);            // authored shapes need room either side
+      const gid = this.nextGroup++;
+      const g = { w, tier, from: from || "", left: 0, failed: false };
+      const tag = (e) => { e.g = gid; g.left++; return e; };
       if (w === "bomb") {
-        // scattered and staggered, not one dramatic launch — reads like ambient bad luck,
-        // so dodging it is the same spatial-awareness skill as everything else, not a queue-watching game
-        const n = 2 + (Math.random() < 0.4 ? 1 : 0);
-        for (let i = 0; i < n; i++) this.spawn("bomb", ax + rand(-220, 220), rand(-60, 60), rand(0.1, 0.34), rand(0, 550));
+        if (tier === 0) {
+          // scattered and staggered, not one dramatic launch — reads like ambient bad luck
+          const n = 2 + (Math.random() < 0.4 ? 1 : 0);
+          for (let i = 0; i < n; i++) tag(this.spawn("bomb", ax + rand(-220, 220), rand(-60, 60), rand(0.1, 0.34), rand(0, 550)));
+        } else if (tier === 1) {
+          // one more bomb, tighter around the sender's aim
+          for (let i = 0; i < 3; i++) tag(this.spawn("bomb", ax + rand(-150, 150), rand(-40, 40), rand(0.12, 0.32), rand(0, 450)));
+        } else if (tier === 2) {
+          // staggered wall with a bait fruit in a gap — authored pressure
+          [-190, 0, 190].forEach((dx, i) => tag(this.spawn("bomb", axc + dx, rand(-20, 20), 0.24, i * 220)));
+          tag(this.spawn(this.randomFruit(), axc + (Math.random() < 0.5 ? -95 : 95), 0, 0.17, 110));
+        } else {
+          // signature BOMB CROWN: a V of bombs around a golden fruit at the top, plus a
+          // late riser under it — hard, but a precise cut through the gap is clean
+          [[-240, 0.4], [-115, 0.27], [115, 0.27], [240, 0.4]].forEach(([dx, ap], i) =>
+            tag(this.spawn("bomb", axc + dx, 0, ap, i * 60)));
+          tag(this.spawn(this.randomFruit(), axc, 0, 0.12, 120, true));
+          tag(this.spawn("bomb", axc, 0, 0.3, 650));
+        }
       } else if (w === "trap") {
-        this.spawn("trap", ax + rand(-30, 30), rand(-40, 40), rand(0.12, 0.32));
+        if (tier === 3) {
+          // signature STRAWBERRY PATCH: real TIFF BERRIES everywhere, one of them is fake.
+          // The usual purple tell still exists — a calm player finds it.
+          const n = 5, fakeSlot = (Math.random() * n) | 0;
+          for (let i = 0; i < n; i++) {
+            const x = 150 + i * 175 + rand(-30, 30), ap = rand(0.14, 0.32), d = rand(0, 600);
+            tag(i === fakeSlot ? this.spawn("trap", x, rand(-30, 30), ap, d, false, "straw") : this.spawn("straw", x, rand(-30, 30), ap, d));
+          }
+        } else {
+          // a fake can wear any fruit; higher tiers surround it with real ones of the same kind
+          const look = this.randomFruit();
+          const ap = rand(0.14, 0.3), x = axc + rand(-30, 30);
+          tag(this.spawn("trap", x, rand(-40, 40), ap, 0, false, look));
+          const decoys = tier === 2 ? [-140, 140] : tier === 1 ? [Math.random() < 0.5 ? -140 : 140] : [];
+          decoys.forEach((dx) => tag(this.spawn(look, x + dx, rand(-40, 40), ap + rand(-0.05, 0.05), rand(0, 180))));
+        }
       } else if (w === "flood") {
-        // tempting, not a gift: real fruit AND 1-2 real bombs hidden in the same burst
-        const n = 6, bombCount = 1 + (Math.random() < 0.5 ? 1 : 0);
-        const bombSlots = new Set();
-        while (bombSlots.size < bombCount) bombSlots.add((Math.random() * n) | 0);
-        for (let i = 0; i < n; i++) {
-          const x0 = rand(100, W - 100), vx = rand(-90, 90), apexFrac = rand(0.1, 0.36), delay = i * 130;
-          if (bombSlots.has(i)) this.spawn("bomb", x0, vx, apexFrac, delay);
-          else this.spawn(FRUITS[(Math.random() * FRUITS.length) | 0].k, x0, vx, apexFrac, delay); // flood fruit never crit
+        if (tier === 3) {
+          // signature GAUNTLET: a sweep of fruit riding high with bombs peaking lower
+          // between them — the clean route is one confident cut along the top
+          for (let i = 0; i < 10; i++) {
+            const x = 120 + i * 84, bomb = i === 2 || i === 5 || i === 8;
+            tag(this.spawn(bomb ? "bomb" : this.randomFruit(), x, 0, bomb ? 0.46 : 0.13, i * 110));
+          }
+        } else {
+          // tempting, not a gift: real fruit AND real bombs hidden in the same burst.
+          // HEATED is longer; FUMING alternates sides and slips a dud in to classify.
+          const n = [6, 8, 9][tier], bombCount = tier === 0 ? 1 + (Math.random() < 0.5 ? 1 : 0) : 2;
+          const slots = new Set();
+          while (slots.size < bombCount + (tier === 2 ? 1 : 0)) slots.add((Math.random() * n) | 0);
+          const special = [...slots];
+          const cadence = [130, 120, 110][tier];
+          for (let i = 0; i < n; i++) {
+            const x0 = tier === 2 ? (i % 2 ? rand(560, 880) : rand(120, 440)) : rand(100, W - 100);
+            const vx = rand(-90, 90), apexFrac = rand(0.1, 0.36), delay = i * cadence;
+            const si = special.indexOf(i);
+            const kind = si < 0 ? this.randomFruit() : si < bombCount ? "bomb" : "dud";
+            tag(this.spawn(kind, x0, vx, apexFrac, delay));   // flood fruit never crit
+          }
         }
       } else if (w === "gust") {
-        this.windUntil = this.simT() + GUST_CHAOS_MS;
+        // immediate WHOOSH: everything already airborne gets shoved sideways, then the
+        // chaos window starts (x = x0 + vx·t stays closed-form: re-base x0 for the new vx)
+        const simT = this.simT(), dv = GUST_SHOVE[tier] * (Math.random() < 0.5 ? -1 : 1);
+        for (const e of this.entities) {
+          if (!e.alive) continue;
+          const dt = (simT - e.t0) / 1000;
+          if (dt > 0) { e.x0 -= dv * dt; e.vx += dv; }
+        }
+        for (let i = 0; i < 16; i++) {
+          const y = rand(0, this.H);
+          this.particles.push({ streak: true, x: dv > 0 ? -20 : W + 20, y, dx: dv > 0 ? 1 : -1, dy: 0, speed: rand(900, 1300), len: rand(60, 120), color: "rgba(95,135,168,.55)", born: this.now(), dur: rand(500, 800) });
+        }
+        this.popups.push({ x: W / 2, y: this.H * 0.4, text: "WHOOSH!", color: "#5f87a8", size: 60, born: this.now(), dur: 800 });
+        this.windUntil = simT + GUST_CHAOS_MS[tier];
+        this.windBoost = GUST_BOOST[tier];
+        this.gustGroup = g;
+        if (tier === 3) for (let i = 0; i < 3; i++) this.spawnChaos(this.randomFruit(), false);
         vib([15, 40, 15, 40, 15]);
         SFX.gust();
+        return;
       }
+      this.groups.set(gid, g);
+    }
+
+    // an entity from a sent attack left play; when a whole attack resolves without
+    // it ever hurting you, that composure earns meter and gets called out by name
+    resolve(e, failed) {
+      if (!e.g) return;
+      const g = this.groups.get(e.g);
+      if (!g) return;
+      if (failed) g.failed = true;
+      if (--g.left <= 0) { this.groups.delete(e.g); this.groupDone(g); }
+    }
+    groupDone(g) {
+      if (g.failed || !this.running) return;
+      const major = g.w !== "bomb";
+      this.gainMeter(!major ? (g.tier >= 2 ? METER.dodgeFuming : METER.dodgeBomb) : (g.tier >= 2 ? METER.dodgeFuming : METER.dodgeMajor));
+      this.stats.attacksDodged++;
+      const who = g.from ? g.from.toUpperCase() + "'S " : "";
+      const what = (g.tier ? TIER_NAMES[g.tier] + " " : "") + WEAPON_NAMES[g.w];
+      const text = g.w === "trap" ? "DIDN'T FALL FOR IT!" : g.w === "gust" ? "WEATHERED " + who + what + "!" : "DODGED " + who + what + "!";
+      this.popups.push({ x: W / 2, y: this.H * 0.24, text, color: "#3f9b4f", size: major || g.tier ? 40 : 28, born: this.now(), dur: 1100 });
+      if (major || g.tier) SFX.dodge();
+      this.onEvent({ t: "dodge", w: g.w, tier: g.tier });
     }
 
     /* ---------- physics ---------- */
@@ -254,7 +463,7 @@
     bindInput() {
       const down = (ev) => {
         try { this.canvas.setPointerCapture && this.canvas.setPointerCapture(ev.pointerId); } catch (err) {}
-        this.trails.set(ev.pointerId, { pts: [], count: 0, lastSlice: 0, swished: 0 });
+        this.trails.set(ev.pointerId, { pts: [], count: 0, clean: true, lastSlice: 0, swished: 0 });
         this.addTrailPoint(ev);
       };
       const move = (ev) => { if (this.trails.has(ev.pointerId)) this.addTrailPoint(ev); };
@@ -267,7 +476,7 @@
             const rel = this.clientToWorld(ev.clientX, ev.clientY);
             const dt = this.now() - first.t;
             const dist = Math.hypot(rel.x - first.x, rel.y - first.y);
-            if (dt < TAP_MAX_MS && dist < TAP_MAX_DIST) this.tryDefuse(rel);
+            if (dt < TAP_MAX_MS && dist < DUD_TAP_MOVE_TOLERANCE) this.tryDefuse(rel);
           }
           this.finalizeCombo(tr);
         }
@@ -308,13 +517,12 @@
         if (!e.alive) continue;
         const p = this.posOf(e, simT);
         if (!p || p.y < -80) continue;
-        const def = KINDS[e.kind];
-        if (this.segCircle(a, b, p.x, p.y, def.r + 14)) {
+        if (this.segCircle(a, b, p.x, p.y, e.r + 14)) {
           e.alive = false;
           if (e.kind === "bomb") { this.hitBomb(e, p, simT); return; }
           if (e.kind === "trap") { this.hitTrap(e, p); continue; }
-          if (e.kind === "dud") { this.missDud(p); continue; }
-          this.burstSlice(e, p, def, angle);
+          if (e.kind === "dud") { this.fizzleDud(e, p); continue; }
+          this.resolve(e, false);
           // score rewards timing, not just contact: slice near the apex (low vertical speed)
           // for a big bonus, so nonstop spam-swiping stops being the optimal strategy
           const dt = (simT - e.t0) / 1000;
@@ -322,22 +530,39 @@
           let tier = null, mult = 1;
           if (vyNow < APEX_PERFECT_VY) { tier = "PERFECT"; mult = APEX_PERFECT_MULT; this.stats.perfects++; }
           else if (vyNow < APEX_GREAT_VY) { tier = "GREAT"; mult = APEX_GREAT_MULT; }
+          const berry = e.kind === "straw";
           const base = e.crit ? CRIT_SCORE : FRUIT_SCORE;
           const pts = Math.round(base * mult);
-          const coin = (e.crit ? CRIT_COIN : FRUIT_COIN) + (e.kind === "straw" ? 1 : 0); // her fruit pays extra
+          // the TIFF BERRY pays big — which is exactly what makes a fake one work
+          const coin = berry ? (tier === "PERFECT" ? BERRY_PERFECT_COIN : BERRY_COIN) : (e.crit ? CRIT_COIN : FRUIT_COIN);
           this.score += pts;
           this.stats.fruit++;
           this.onCoin(coin);
-          const label = (tier ? tier + " " : "") + (e.crit ? "CRIT " : "") + "+" + pts;
+          this.burstSlice(e, p, KINDS[e.kind], angle, tier === "PERFECT");
+          // only quality cuts build TIFFED OFF; a plain slice keeps the streak alive but adds nothing
+          if (tier === "PERFECT") this.gainMeter(berry ? METER.perfectBerry : METER.perfect);
+          else if (tier === "GREAT") this.gainMeter(METER.great);
+          else tr.clean = false;
+          const lvl = this.streakLevel();
+          const label = tier === "PERFECT"
+            ? (berry ? "PERFECT BERRY" : "PERFECT") + "!".repeat(1 + lvl) + " +" + pts
+            : (tier ? tier + " " : "") + (e.crit ? "CRIT " : "") + "+" + pts;
           const color = tier === "PERFECT" ? "#3f9b4f" : (e.crit ? "#f0a821" : "#2a2624");
-          const size = tier === "PERFECT" ? 50 : (e.crit ? 46 : 36);
-          this.popups.push({ x: p.x, y: p.y, text: label, color, size, born: this.now(), dur: 750 });
-          this.popups.push({ x: p.x + 30, y: p.y + 24, text: "+$" + coin, color: "#f0a821", size: 20, born: this.now(), dur: 650 });
+          const size = tier === "PERFECT" ? 50 + lvl * 6 : (e.crit ? 46 : 36);
+          this.popups.push({ x: p.x, y: p.y, text: label, color, size, born: this.now(), dur: tier === "PERFECT" ? 900 : 750 });
+          this.popups.push({ x: p.x + 30, y: p.y + 24, text: "+$" + coin, color: "#f0a821", size: berry ? 26 : 20, born: this.now(), dur: 650 });
           tr.count++; tr.lastSlice = this.now();
-          vib(tier === "PERFECT" ? 14 : 8);
-          if (e.kind === "straw") SFX.straw(); else SFX.splat();
-          if (tier === "PERFECT") SFX.perfect();
-          else if (e.crit) SFX.coin();
+          if (berry) SFX.straw(); else SFX.splat();
+          if (tier === "PERFECT") {
+            // PERFECT should land like a headshot: micro hit-stop, bright slash, sting
+            this.freezeSimT = simT; this.freezeUntil = this.now() + 45;
+            this.slashFlashUntil = this.now() + 140;
+            vib([18, 20, 12]);
+            SFX.perfect(lvl);
+          } else {
+            vib(tier === "GREAT" ? 10 : 8);
+            if (e.crit) SFX.coin();
+          }
         }
       }
     }
@@ -360,6 +585,7 @@
         if (!p) continue;
         if (Math.hypot(pos.x - p.x, pos.y - p.y) <= KINDS.dud.r + 20) {
           e.alive = false;
+          this.resolve(e, false);
           this.hitDud(p);
           return;
         }
@@ -370,6 +596,7 @@
       this.score += DUD_SCORE;
       this.stats.dudsDefused++;
       this.onCoin(DUD_COIN);
+      this.gainMeter(METER.dud);
       for (let i = 0; i < 16; i++) {
         const a = rand(0, Math.PI * 2), sp = rand(80, 380);
         this.particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60, r: rand(5, 12), color: "#6fcf7d", born: this.now(), dur: rand(450, 800) });
@@ -380,11 +607,18 @@
       SFX.defuse();
     }
 
-    // swiping a dud (the instinctive "get this bomb away from me" reaction) is genuinely
-    // safe — no heart, no score hit — but you also don't get the tap-to-defuse bonus
-    missDud(p) {
+    // swiping a dud is no longer free: it fizzles in your face — small score hit, vents
+    // meter, breaks the streak. It's a TAP target, and it tells you so (green fuse + ripple).
+    fizzleDud(e, p) {
+      this.resolve(e, false);
+      this.score = Math.max(0, this.score - DUD_FIZZLE_PENALTY);
+      this.stats.dudFizzles++;
+      this.loseMeter(METER.fizzle);
       this.burstPoof(p);
-      this.popups.push({ x: p.x, y: p.y, text: "safe…", color: "#9a938a", size: 24, born: this.now(), dur: 600 });
+      this.popups.push({ x: p.x, y: p.y, text: "FIZZLED -" + DUD_FIZZLE_PENALTY, color: "#9a938a", size: 30, born: this.now(), dur: 800 });
+      this.popups.push({ x: p.x, y: p.y + 40, text: "(tap duds!)", color: "#3f9b4f", size: 20, born: this.now(), dur: 800 });
+      vib(12);
+      SFX.fizzle();
     }
 
     hitBomb(e, p, simT) {
@@ -392,20 +626,27 @@
       const heartsLost = HEARTS - this.hearts;
       const penalty = HEART_PENALTY[heartsLost - 1] || HEART_PENALTY[HEART_PENALTY.length - 1];
       this.score = Math.max(0, this.score - penalty);
+      this.stats.bombHits++;
+      this.loseMeter(METER.bomb);
+      const from = e.g && this.groups.get(e.g) ? this.groups.get(e.g).from : "";
+      this.resolve(e, true);
+      if (this.gustGroup) this.gustGroup.failed = true;
       for (const o of this.entities) {
         if (!o.alive || o === e) continue;
         const op = this.posOf(o, simT);
         if (op && Math.hypot(op.x - p.x, op.y - p.y) < BOMB_BLAST) {
-          o.alive = false; this.burstPoof(op);
+          o.alive = false; this.burstPoof(op); this.resolve(o, false);
         }
       }
       this.burstBoom(p);
       this.shakeUntil = this.now() + 500;
       this.flashUntil = this.now() + 200;
-      this.trails.forEach((tr) => { tr.count = 0; });
+      this.trails.forEach((tr) => { tr.count = 0; tr.clean = true; });
       this.popups.push({ x: p.x, y: p.y, text: "-1 HEART", color: "#e5254f", size: 52, born: this.now(), dur: 1000 });
       this.popups.push({ x: p.x, y: p.y + 62, text: "-" + penalty + " SCORE", color: "#9a938a", size: 26, born: this.now(), dur: 900 });
-      this.stampUntil = this.now() + 1500;   // "TIFFED OFF!" rage stamp
+      // a sent bomb should feel like it came from a person, not the game engine
+      if (from) this.popups.push({ x: W / 2, y: this.H * 0.62, text: from.toUpperCase() + " GOT YOU!", color: "#2a2624", size: 40, born: this.now(), dur: 1300 });
+      this.stamp = { lines: ["BOOM!"], fill: "#f5920f", until: this.now() + 1100, dur: 1100 };
       vib([40, 60, 40]);
       SFX.boom(); SFX.heart();
       this.onEvent({ t: "hurt", hearts: this.hearts });
@@ -414,9 +655,15 @@
 
     hitTrap(e, p) {
       this.score = Math.max(0, this.score - TRAP_PENALTY);
+      this.stats.fakeHits++;
+      this.loseMeter(METER.fake);
+      this.resolve(e, true);
       this.burstTrap(p);
-      this.popups.push({ x: p.x, y: p.y, text: "FAKE! -" + TRAP_PENALTY, color: "#8c46c8", size: 46, born: this.now(), dur: 1100 });
-      vib(20);
+      // the fruit pops… a beat… then the purple GOTCHA
+      this.freezeSimT = this.simT(); this.freezeUntil = this.now() + 110;
+      this.popups.push({ x: p.x, y: p.y, text: "GOTCHA! -" + TRAP_PENALTY, color: "#8c46c8", size: 50, born: this.now() + 90, dur: 1200 });
+      this.flashUntil = this.now() + 160; this.flashColor = "140,70,200";
+      vib([20, 60, 30]);
       SFX.trap();
       // the coin steal itself happens in main.js (it needs the Deck, which Arena
       // doesn't know about) — this just hands over where to draw its popup
@@ -425,23 +672,28 @@
 
     finalizeCombo(tr) {
       if (tr.count >= 3) {
+        // CLEAN: every cut in the combo was GREAT or PERFECT — that's what builds the meter.
+        // A dirty combo still pays its basic score/cash.
+        const clean = tr.clean;
         const bonus = COMBO_BONUS[tr.count] || 40;
-        const coins = COMBO_COIN[tr.count] || 15;   // combos bankroll your next attack
+        const coins = (COMBO_COIN[tr.count] || 15) + (clean ? 5 : 0);   // combos bankroll your next attack
         this.score += bonus;
         this.onCoin(coins);
         this.onBurst(tr.count);
         this.stats.bestCombo = Math.max(this.stats.bestCombo, tr.count);
-        this.popups.push({ x: W / 2, y: this.H * 0.3, text: "×" + tr.count + " COMBO  +" + bonus, color: "#e5254f", size: 52, born: this.now(), dur: 1100 });
+        if (clean) { this.stats.cleanCombos++; this.gainMeter(METER.clean[tr.count] || METER.cleanMax); }
+        const label = (clean ? "CLEAN ×" : "×") + tr.count + (clean ? "" : " COMBO") + "  +" + bonus;
+        this.popups.push({ x: W / 2, y: this.H * 0.3, text: label, color: clean ? "#3f9b4f" : "#e5254f", size: 52, born: this.now(), dur: 1100 });
         this.popups.push({ x: W / 2, y: this.H * 0.3 + 90, text: "+$" + coins, color: "#f0a821", size: 40, born: this.now(), dur: 1100 });
         SFX.combo(tr.count);
         this.onEvent({ t: "combo", n: tr.count });
       }
-      tr.count = 0;
+      tr.count = 0; tr.clean = true;
     }
 
     /* ---------- effects ---------- */
-    burstSlice(e, p, def, angle) {
-      const gl = Assets.get(def.spr);
+    burstSlice(e, p, def, angle, big) {
+      const gl = Assets.get(e.spr);
       if (!gl) return;
       const nx = Math.sin(angle), ny = -Math.cos(angle);
       for (let i = 0; i < 2; i++) {
@@ -451,13 +703,14 @@
           vx: e.vx * 0.5 + nx * s * 220 + rand(-40, 40),
           vy: -150 + ny * s * 220,
           rot: p.rot + (angle - Math.PI / 2), vr: s * rand(2, 5),
-          size: def.r * 2.3, born: this.now(),
+          size: e.r * 2.3, born: this.now(),
         });
       }
-      for (let i = 0; i < 14; i++) {
-        const a = rand(0, Math.PI * 2), sp = rand(60, 420);
-        this.particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, r: rand(5, 14), color: e.crit ? "#ffd94d" : def.juice, born: this.now(), dur: rand(500, 900) });
+      for (let i = 0; i < (big ? 26 : 14); i++) {
+        const a = rand(0, Math.PI * 2), sp = rand(60, big ? 620 : 420);
+        this.particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, r: rand(5, big ? 17 : 14), color: e.crit ? "#ffd94d" : def.juice, born: this.now(), dur: rand(500, 900) });
       }
+      if (big) this.particles.push({ ring: true, x: p.x, y: p.y, r: 20, color: "#3f9b4f", born: this.now(), dur: 300 });
     }
     burstBoom(p) {
       for (let i = 0; i < 26; i++) {
@@ -484,19 +737,39 @@
       this._raf = requestAnimationFrame(this._loop);
       const nowT = this.now();
       const simT = this.simT();
+      const frameDt = this._lastLoopT ? Math.min(100, nowT - this._lastLoopT) : 0;
+      this._lastLoopT = nowT;
 
       if (this.running) {
-        // escalation arc: clean slicing early, chaos late (endless boards ramp on a fixed
-        // clock instead of their — effectively infinite — round duration, then hold at max)
-        const prog = clamp(simT / (this.endless ? ESCALATE_MS : this.roundDur), 0, 1);
+        // escalation arc: clean slicing early, chaos late
+        const prog = clamp(simT / this.roundDur, 0, 1);
+        const gusting = this.windUntil && simT < this.windUntil;
         if (simT >= this.nextNatural) {
           this.spawnNatural(prog);
-          if (Math.random() < lerp(0.05, 0.4, prog)) this.spawnNatural(prog);
+          if (Math.random() < lerp(0.05, 0.4, prog) + (gusting ? this.windBoost : 0)) this.spawnNatural(prog);
           this.nextNatural = simT + rand(1, 1.45) * lerp(1500, 750, prog);
         }
         if (simT >= this.nextBurst) {
-          for (let i = 0; i < 3; i++) setTimeout(() => this.running && this.spawnNatural(prog), i * 150);
-          this.nextBurst = simT + rand(1, 1.4) * lerp(11000, 5500, prog);
+          // after the opening, most bursts are authored skill patterns instead of random triples
+          if (simT > 8000 && !gusting && Math.random() < 0.7) this.spawnPattern(prog);
+          else for (let i = 0; i < 3; i++) setTimeout(() => this.running && this.spawnNatural(prog), i * 150);
+          this.nextBurst = simT + rand(1, 1.4) * lerp(9000, 4500, prog);
+        }
+        // a gust you got through without losing a heart counts as a clean defense
+        if (this.gustGroup && !gusting) { const g = this.gustGroup; this.gustGroup = null; this.groupDone(g); }
+
+        // TIFFED OFF decays after a short grace with no skill events, and the streak goes cold
+        if (nowT - this.lastSkillT > METER_GRACE_MS) {
+          this.streak = 0;
+          this.meter = Math.max(0, this.meter - METER_DECAY_PER_S * frameDt / 1000);
+        }
+        this.stats.meterIntegral += this.meter * frameDt;
+        this.stats.meterTime += frameDt;
+
+        // SLICE → SABOTAGE → SURVIVE: surface the match arc
+        if (this.phaseIdx < PHASES.length && simT >= PHASES[this.phaseIdx].at) {
+          this.onEvent({ t: "phase", name: PHASES[this.phaseIdx].name, n: this.phaseIdx + 2 });
+          this.phaseIdx++;
         }
         // gust window: a steady trickle of streaks entering from all 4 edges, so the
         // "stuff can come from anywhere right now" state reads clearly the whole time
@@ -523,21 +796,28 @@
               // falling past is free — a fake only hurts if you cut it, and a dud was never dangerous
             } else {
               this.score = Math.max(0, this.score - MISS_PENALTY);
+              this.loseMeter(METER.miss);
               this.popups.push({ x: clamp(p.x, 80, W - 80), y: this.H - 120, text: "miss -" + MISS_PENALTY, color: "#9a938a", size: 30, born: nowT, dur: 700 });
               SFX.miss();
             }
+            this.resolve(e, false);
           }
         }
-        if (!this.endless && simT >= this.roundDur) this.endRound("time");
+        if (simT >= this.roundDur) this.endRound("time");
       }
 
       if (this.entities.length > 90) this.entities = this.entities.filter((e) => e.alive || nowT - e.t0 < 30000);
 
-      this.draw(nowT, simT);
+      // PERFECT / GOTCHA hit-stop: the picture holds for a beat (the sim clock keeps going,
+      // so boards never drift — the world just catches up when the freeze lifts)
+      this.draw(nowT, nowT < this.freezeUntil ? this.freezeSimT : simT);
 
-      if (nowT - this.lastState > 150) {
+      if (nowT - this.lastState > 100) {
         this.lastState = nowT;
-        this.onState({ score: this.score, hearts: this.hearts, left: Math.max(0, this.roundDur - simT), dur: this.roundDur, elapsed: simT, running: this.running });
+        this.onState({
+          score: this.score, hearts: this.hearts, left: Math.max(0, this.roundDur - simT), dur: this.roundDur, elapsed: simT, running: this.running,
+          meter: this.meter, tier: this.tier(), streak: this.streakLevel(),
+        });
       }
     }
 
@@ -562,15 +842,42 @@
       ctx.fillStyle = this._pat;
       ctx.fillRect(0, 0, W, H);
 
+      // final 10 seconds: a huge faint countdown behind the play
+      const left = this.roundDur - this.simT();
+      if (this.running && left <= 10000 && left > 0) {
+        const n = Math.ceil(left / 1000), frac = (left % 1000) / 1000;
+        ctx.save();
+        ctx.translate(W / 2, H * 0.52);
+        const sc = 1 + 0.15 * frac;
+        ctx.scale(sc, sc);
+        ctx.globalAlpha = 0.1 + 0.08 * frac;
+        ctx.font = '460px "Luckiest Guy","Arial Black",sans-serif';
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillStyle = "#e5254f";
+        ctx.fillText(String(n), 0, 0);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+
       // entities
       for (const e of this.entities) {
         if (!e.alive) continue;
         const p = this.posOf(e, simT);
         if (!p || p.y > H + 140 || p.y < -160) continue;
-        const def = KINDS[e.kind];
-        const gl = Assets.get(def.spr);
+        const gl = Assets.get(e.spr);
         if (!gl) continue;
-        const size = def.r * 2.3;
+        const size = e.r * 2.3;
+        if (e.kind === "dud") {
+          // TAP cue: a dashed green ring that ripples outward like a finger-press
+          const ph = (nowT % 900) / 900;
+          ctx.save();
+          ctx.strokeStyle = "rgba(63,155,79," + (0.85 * (1 - ph)).toFixed(2) + ")";
+          ctx.lineWidth = 5;
+          ctx.setLineDash([12, 10]);
+          ctx.beginPath(); ctx.arc(p.x, p.y, e.r + 10 + ph * 34, 0, Math.PI * 2); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(p.rot * 0.6);
@@ -587,13 +894,14 @@
           if (Math.random() < 0.08) this.particles.push({ x: p.x + rand(-50, 50), y: p.y + rand(-50, 50), vx: rand(-20, 20), vy: rand(-70, -10), r: 4, color: "#f0a821", born: nowT, dur: 350 });
         }
         if (e.kind === "dud") {
-          const pulse = 0.22 + 0.16 * Math.sin(nowT / 180);
+          const pulse = 0.4 + 0.2 * Math.sin(nowT / 180);
           ctx.shadowColor = "rgba(63,155,79," + pulse.toFixed(2) + ")";
-          ctx.shadowBlur = 26;
-          if (Math.random() < 0.05) this.particles.push({ x: p.x + rand(-36, 36), y: p.y + rand(-36, 36), vx: rand(-25, 25), vy: rand(-55, -5), r: 4, color: "#6fcf7d", born: nowT, dur: 380 });
+          ctx.shadowBlur = 30;
+          if (Math.random() < 0.08) this.particles.push({ x: p.x + rand(-36, 36), y: p.y + rand(-36, 36), vx: rand(-25, 25), vy: rand(-55, -5), r: 4, color: "#6fcf7d", born: nowT, dur: 380 });
         }
-        if ((e.kind === "bomb" || e.kind === "dud") && Math.random() < 0.25) {
-          this.particles.push({ x: p.x + 30, y: p.y - 44, vx: rand(-40, 40), vy: rand(-80, -10), r: 4, color: "#ffd94d", born: nowT, dur: 300 });
+        // fuse sparks: yellow on a live bomb, green on a dud
+        if ((e.kind === "bomb" || e.kind === "dud") && Math.random() < 0.3) {
+          this.particles.push({ x: p.x + 30, y: p.y - 44, vx: rand(-40, 40), vy: rand(-80, -10), r: e.kind === "dud" ? 5 : 4, color: e.kind === "dud" ? "#6fcf7d" : "#ffd94d", born: nowT, dur: 300 });
         }
         ctx.drawImage(gl.full, -size / 2, -size / 2, size, size);
         ctx.restore();
@@ -642,12 +950,13 @@
         const pts = tr.pts.filter((p) => nowT - p.t < 130);
         if (pts.length < 2) return;
         ctx.lineCap = "round"; ctx.lineJoin = "round";
+        const hot = nowT < this.slashFlashUntil;   // a PERFECT brightens the blade
         for (let pass = 0; pass < 2; pass++) {
           for (let i = 1; i < pts.length; i++) {
             const a = i / pts.length;
             if (pass === 0) {
-              ctx.strokeStyle = "rgba(229,37,79," + (a * 0.8).toFixed(2) + ")";
-              ctx.lineWidth = 6 + a * 18;
+              ctx.strokeStyle = (hot ? "rgba(240,168,33," : "rgba(229,37,79,") + (a * 0.8).toFixed(2) + ")";
+              ctx.lineWidth = (hot ? 10 : 6) + a * (hot ? 26 : 18);
             } else {
               ctx.strokeStyle = "rgba(42,38,36," + (a * 0.85).toFixed(2) + ")";
               ctx.lineWidth = 2 + a * 5;
@@ -663,7 +972,7 @@
       // popups: chunky, slightly crooked
       for (const pp of this.popups) {
         const k = (nowT - pp.born) / pp.dur;
-        if (k >= 1) continue;
+        if (k >= 1 || k < 0) continue;
         if (pp.rot === undefined) pp.rot = rand(-0.09, 0.09);
         ctx.save();
         ctx.translate(pp.x, pp.y - k * 80);
@@ -690,16 +999,17 @@
         ctx.strokeRect(7, 7, W - 14, H - 14);
       }
 
-      // bomb flash
+      // bomb flash (white) / fake flash (purple)
       if (nowT < this.flashUntil) {
-        ctx.fillStyle = "rgba(255,255,255," + ((this.flashUntil - nowT) / 200 * 0.75).toFixed(2) + ")";
+        ctx.fillStyle = "rgba(" + (this.flashColor || "255,255,255") + "," + ((this.flashUntil - nowT) / 200 * 0.75).toFixed(2) + ")";
         ctx.fillRect(0, 0, W, H);
-      }
+      } else this.flashColor = null;
 
-      // rage stamp on heart loss
-      if (this.stampUntil && nowT < this.stampUntil) {
-        const left = this.stampUntil - nowT;
-        const kIn = Math.min(1, (1500 - left) / 130);       // slams in
+      // slam stamp: BOOM! on a heart loss, TIFFED OFF! when the meter maxes
+      const st = this.stamp;
+      if (st && nowT < st.until) {
+        const left = st.until - nowT;
+        const kIn = Math.min(1, (st.dur - left) / 130);     // slams in
         const alpha = Math.min(1, left / 350);              // fades out
         ctx.save();
         ctx.translate(W / 2, H * 0.42);
@@ -711,16 +1021,15 @@
         ctx.textAlign = "center";
         ctx.lineWidth = 18;
         ctx.strokeStyle = "#2a2624";
-        ctx.strokeText("TIFFED", 0, -40);
-        ctx.strokeText("OFF!", 0, 110);
-        ctx.fillStyle = "#e5254f";
-        ctx.fillText("TIFFED", 0, -40);
-        ctx.fillText("OFF!", 0, 110);
+        const y0 = st.lines.length > 1 ? -40 : 40;
+        st.lines.forEach((ln, i) => ctx.strokeText(ln, 0, y0 + i * 150));
+        ctx.fillStyle = st.fill;
+        st.lines.forEach((ln, i) => ctx.fillText(ln, 0, y0 + i * 150));
         ctx.restore();
         ctx.globalAlpha = 1;
       }
     }
   }
 
-  window.Game = { Arena, W, ROUND_MS, HEARTS, FRUITS, KINDS };
+  window.Game = { Arena, W, ROUND_MS, HEARTS, HEART_PENALTY, FRUITS, KINDS, tierOf, TIER_VENT, TIER_NAMES, WEAPON_NAMES };
 })();

@@ -130,25 +130,66 @@ input::placeholder { color: #b9b0a2; }
 .board + .board { border-top: 4px dashed var(--ink); }
 
 /* board HUD */
+/* hierarchy: big scores at the edges, big clock in the middle, name + hearts underneath */
 .bhud {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 4px 10px; font-weight: 900; font-size: 14px; gap: 8px; z-index: 5;
-  min-height: 34px; background: var(--paper);
+  padding: 3px 10px 2px; font-weight: 900; font-size: 12px; gap: 8px; z-index: 5;
+  min-height: 42px; background: var(--paper);
 }
-.board.solo .bhud { padding-top: calc(6px + env(safe-area-inset-top)); min-height: 44px; font-size: 16px; }
-.bhud .me { color: var(--ink); }
-.bhud .them { color: var(--red); text-align: right; }
-.bhud .tick { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 900; }
-.bhud .sc { font-size: 1.2em; }
+.board.solo .bhud { padding-top: calc(6px + env(safe-area-inset-top)); min-height: 48px; }
+.bhud .me, .bhud .them { display: flex; flex-direction: column; line-height: 1; min-width: 0; }
+.bhud .me { color: var(--ink); align-items: flex-start; }
+.bhud .them { color: var(--red); align-items: flex-end; }
+.bhud .sc { font-family: "Luckiest Guy", "Arial Black", sans-serif; font-weight: 400; font-size: 26px; line-height: .95; }
+.bhud .who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.bhud .tick {
+  font-family: "Luckiest Guy", "Arial Black", sans-serif; font-weight: 400;
+  font-size: 24px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.bhud .tick.urgent { color: var(--red); animation: lanepulse .5s infinite alternate; }
 .bhud svg { vertical-align: -2px; }
-.endrun-btn {
-  font: inherit; font-weight: 900; font-size: 11px; letter-spacing: .5px;
-  color: var(--paper); background: var(--red); border: 2px solid var(--ink);
-  border-radius: 7px; padding: 4px 9px 2px; cursor: pointer;
+.heat {
+  font-size: 9px; letter-spacing: .5px; color: var(--paper); border-radius: 4px;
+  padding: 1px 4px 0; margin-right: 3px; vertical-align: 1px; border: 1.5px solid var(--ink);
+}
+.heat.t1 { background: #f5920f; }
+.heat.t2 { background: var(--red); }
+.heat.t3 { background: var(--purple); animation: lanepulse .35s infinite alternate; }
+
+/* TIFFED OFF meter — the one skill resource. Notches at the HEATED / FUMING thresholds. */
+.meter {
+  position: relative; height: 16px; margin: 0 8px 2px; z-index: 5;
+  border: 2.5px solid var(--ink); border-radius: 8px; background: #fffdf6; overflow: hidden;
+}
+.meter-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #c9bfae; transition: width .12s linear, background .2s; }
+.meter[data-tier="1"] .meter-fill { background: #f5920f; }
+.meter[data-tier="2"] .meter-fill { background: var(--red); }
+.meter[data-tier="3"] .meter-fill { background: repeating-linear-gradient(-45deg, var(--red) 0 10px, var(--purple) 10px 20px); animation: maxslide .5s linear infinite; }
+@keyframes maxslide { to { background-position: 28px 0; } }
+.meter .mk { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed rgba(42,38,36,.45); }
+.meter-label, .meter-pct {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  font-family: "Luckiest Guy", "Arial Black", sans-serif; font-size: 11px; letter-spacing: 1px;
+  color: var(--ink); text-shadow: 1px 1px 0 #fffdf6, -1px -1px 0 #fffdf6, 1px -1px 0 #fffdf6, -1px 1px 0 #fffdf6; padding-top: 2px;
+}
+.meter-label { left: 7px; }
+.meter-pct { right: 7px; font-variant-numeric: tabular-nums; }
+/* the hidden streak is felt, not read: the meter glows hotter while you stay locked in */
+/* practice/test mode controls */
+.testbar { display: flex; gap: 4px; margin: 3px 8px 0; z-index: 5; }
+.testbar button {
+  flex: 1; font: inherit; font-weight: 900; font-size: 9.5px; letter-spacing: .3px; cursor: pointer;
+  color: var(--ink); background: #fffdf6; border: 2px solid var(--ink); border-radius: 6px; padding: 4px 2px 3px;
+}
+.testbar button.on { background: var(--ink); color: var(--gold); }
+.meter[data-streak="1"] { box-shadow: 0 0 0 2px rgba(245,146,15,.35); }
+.meter[data-streak="2"] { box-shadow: 0 0 0 3px rgba(229,37,79,.4); }
+.meter[data-streak="3"] { animation: streakglow .4s infinite alternate; }
+@keyframes streakglow {
+  from { box-shadow: 0 0 0 2px rgba(140,70,200,.35); }
+  to   { box-shadow: 0 0 0 4px rgba(140,70,200,.7); }
 }
 
-.timerbar { height: 5px; background: rgba(42,38,36,.15); z-index: 5; }
-.timerbar-fill { height: 100%; width: 100%; background: var(--red); transition: width .25s linear; }
 
 .arena-wrap { position: relative; flex: 1; min-height: 0; }
 .arena-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -177,9 +218,11 @@ input::placeholder { color: #b9b0a2; }
 }
 .board.solo .deck { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
 
-/* the fuse lane: attacks slide toward the spark */
+/* the fuse lane: attacks slide right→left into the impact spark, speeding up as they go.
+   The left quarter is a hatched danger zone; the wallet sits beside the lane, always visible. */
+.lane-row { display: flex; align-items: stretch; gap: 6px; margin: 0 2px 7px; }
 .lane {
-  position: relative; height: 38px; margin: 0 2px 7px;
+  position: relative; flex: 1; height: 48px;
   border: 3px solid var(--ink); border-radius: 9px; background: #fffdf6;
   overflow: hidden;
 }
@@ -187,13 +230,21 @@ input::placeholder { color: #b9b0a2; }
   content: ""; position: absolute; left: 8px; right: 8px; top: 50%;
   border-top: 3px dashed rgba(42,38,36,.4);
 }
-.lane .spark { position: absolute; left: 3px; top: 50%; transform: translateY(-50%); }
+.lane .impact {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 24%;
+  background: repeating-linear-gradient(-45deg, rgba(229,37,79,.13) 0 7px, transparent 7px 14px);
+  border-right: 2px solid rgba(229,37,79,.45);
+}
+.lane .spark { position: absolute; left: 3px; top: 50%; transform: translateY(-50%); z-index: 2; }
+.lane.hit .spark { animation: sparkhit .35s ease-out; }
+@keyframes sparkhit { 0% { transform: translateY(-50%) scale(1.8) rotate(25deg); } 100% { transform: translateY(-50%) scale(1); } }
 .coinchip {
-  position: absolute; right: 3px; top: 50%; transform: translateY(-50%) rotate(2deg);
+  display: flex; align-items: center; justify-content: center; min-width: 66px;
+  transform: rotate(2deg);
   font-family: "Luckiest Guy", "Arial Black", sans-serif;
-  font-size: 15px; color: var(--ink); background: var(--gold);
-  border: 2.5px solid var(--ink); border-radius: 8px; padding: 4px 8px 1px;
-  z-index: 2;
+  font-size: 20px; color: var(--ink); background: var(--gold);
+  border: 3px solid var(--ink); border-radius: 9px; padding: 4px 8px 0;
+  box-shadow: 2.5px 2.5px 0 var(--ink);
 }
 /* a landed combo lights the wallet up while the income burst lasts */
 .coinchip.burst { background: var(--green); color: var(--paper); animation: burstpulse .55s infinite alternate; }
@@ -203,15 +254,25 @@ input::placeholder { color: #b9b0a2; }
   to   { box-shadow: 2.5px 2.5px 0 var(--ink), 0 0 9px var(--green); }
 }
 .lane-label {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
-  font-size: 10px; font-weight: 900; letter-spacing: 2px; color: rgba(42,38,36,.35);
+  position: absolute; left: 60%; top: 50%; transform: translate(-50%,-50%);
+  font-size: 11px; font-weight: 900; letter-spacing: 2px; color: rgba(42,38,36,.35);
 }
 .lane-label.hot { color: var(--red); animation: lanepulse .5s infinite alternate; }
 @keyframes lanepulse { from { opacity: .55; } to { opacity: 1; } }
 .qitem {
   position: absolute; top: 50%; transform: translate(-50%,-50%);
-  transition: left .12s linear; z-index: 1; line-height: 0;
+  transition: left .1s linear; z-index: 1; line-height: 0;
+  background: #fffdf6; border: 2.5px solid var(--ink); border-radius: 50%; padding: 3px;
 }
+.qitem .qfake { display: block; width: 30px; line-height: 32px; text-align: center; font-family: "Luckiest Guy", sans-serif; font-size: 26px; color: var(--purple); }
+.qitem.w-trap { border-color: var(--purple); }
+.qitem.w-flood { border-color: var(--red); }
+.qitem.w-gust { border-color: #5f87a8; }
+.qitem.t1 { box-shadow: 0 0 0 3px #f5920f; }
+.qitem.t2 { box-shadow: 0 0 0 3px var(--red); }
+.qitem.t3 { box-shadow: 0 0 0 3px var(--purple), 0 0 0 6px var(--red); }
+.qitem.danger { animation: qdanger .16s infinite alternate; }
+@keyframes qdanger { from { transform: translate(-50%,-50%) scale(1.08) rotate(-6deg); } to { transform: translate(-50%,-50%) scale(1.2) rotate(6deg); } }
 
 /* weapon slots */
 .weapon-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
@@ -232,6 +293,16 @@ input::placeholder { color: #b9b0a2; }
 .wpn .wn { font-size: 8.5px; font-weight: 900; letter-spacing: .5px; pointer-events: none; }
 .wpn .wc { font-family: "Luckiest Guy","Arial Black",sans-serif; font-size: 11px; color: var(--gold); -webkit-text-stroke: .5px var(--ink); pointer-events: none; }
 .wpn.cant { opacity: .38; }
+/* the weapon shows how hard it'll hit right now: border heat + a tier tag */
+.wpn .wt { position: absolute; top: 0; left: 0; right: 0; font-size: 7.5px; font-weight: 900; letter-spacing: .5px; line-height: 11px; color: var(--paper); pointer-events: none; }
+.wpn[data-tier="1"] { border-color: #f5920f; }
+.wpn[data-tier="1"] .wt { background: #f5920f; }
+.wpn[data-tier="2"] { border-color: var(--red); }
+.wpn[data-tier="2"] .wt { background: var(--red); }
+.wpn[data-tier="3"] { border-color: var(--purple); background: #f6ecff; }
+.wpn[data-tier="3"] .wt { background: var(--purple); }
+.wpn[data-tier="1"], .wpn[data-tier="2"], .wpn[data-tier="3"] { padding-top: 11px; }
+.wpn.tired .wc { color: var(--red); }
 .wpn.aiming { border-color: var(--gold); background: #fff3d6; }
 .wpn .cdover {
   position: absolute; left: 0; right: 0; bottom: 0; background: rgba(42,38,36,.45);
@@ -243,6 +314,9 @@ input::placeholder { color: #b9b0a2; }
 .score-lines { font-size: 18px; line-height: 1.8; margin-bottom: 8px; font-weight: 900; }
 .score-lines b { color: var(--red); }
 .stat-lines { font-size: 12.5px; color: #7c7468; line-height: 1.7; margin-bottom: 8px; }
+.stat-lines .pt { font-size: 11px; color: var(--purple); }
+.text-btn.small { font-size: 12px; margin-top: 4px; }
+.red { color: var(--red); }
 .h2h {
   display: inline-block; font-weight: 900; font-size: 14px; margin: 0 0 14px;
   background: var(--gold); border: 2.5px solid var(--ink); border-radius: 8px;
@@ -279,5 +353,5 @@ input::placeholder { color: #b9b0a2; }
   #rotate-overlay { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .slab, .wpn, .toast, .qitem, .coinchip.burst { transition: none; animation: none; }
+  .slab, .wpn, .toast, .qitem, .qitem.danger, .coinchip.burst, .meter, .meter-fill, .lane.hit .spark { transition: none; animation: none; }
 }

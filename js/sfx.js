@@ -66,7 +66,17 @@
     splat()  { noise(0.10, 0.22, 500, 0.8); tone(160, 0.09, "sine", 0.18, 90); },
     straw()  { noise(0.08, 0.16, 700, 0.9); tone(740, 0.09, "sine", 0.12); setTimeout(() => tone(990, 0.11, "sine", 0.1), 55); },
     combo(n) { const base = 500 + Math.min(n, 6) * 120; tone(base, 0.1, "square", 0.08); setTimeout(() => tone(base * 1.5, 0.12, "square", 0.08), 70); },
-    perfect() { tone(1400, 0.09, "sine", 0.13); setTimeout(() => tone(1900, 0.13, "sine", 0.1), 45); },
+    // the sting climbs with the hidden streak, so "locked in" is something you hear
+    perfect(lvl) {
+      const k = 1 + (lvl || 0) * 0.12;
+      tone(1400 * k, 0.09, "sine", 0.14); setTimeout(() => tone(1900 * k, 0.13, "sine", 0.11), 45);
+      noise(0.06, 0.12, 5200, 1.5);
+    },
+    tierUp(t) { const b = t === 2 ? 440 : 330; tone(b, 0.1, "square", 0.08); setTimeout(() => tone(b * 1.5, 0.16, "square", 0.08), 80); },
+    maxed()  { [392, 523, 659, 880].forEach((f, i) => setTimeout(() => tone(f, 0.14, "sawtooth", 0.09), i * 70)); },
+    dodge()  { tone(620, 0.08, "triangle", 0.1); setTimeout(() => tone(930, 0.12, "triangle", 0.1), 60); },
+    fizzle() { noise(0.25, 0.12, 2400, 0.8, 600); tone(260, 0.2, "triangle", 0.08, 140); },
+    phase()  { tone(200, 0.3, "sawtooth", 0.1, 400); setTimeout(() => tone(400, 0.25, "square", 0.08), 180); },
     boom()   { tone(120, 0.5, "sine", 0.4, 40); noise(0.45, 0.35, 300, 0.6, 80); },
     trap()   { tone(300, 0.25, "sawtooth", 0.15, 90); noise(0.2, 0.15, 900, 1); },
     steal()  { tone(500, 0.12, "sawtooth", 0.12, 260); setTimeout(() => tone(260, 0.14, "sawtooth", 0.1), 60); },
