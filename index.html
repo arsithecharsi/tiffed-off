@@ -25,6 +25,7 @@
     <h1 class="big-title">TIFFED<br>OFF!</h1>
     <p class="poster-sub">SLICE. SABOTAGE. SURVIVE.</p>
     <p class="poster-vs" id="poster-vs">YOU <span>vs</span> YOUR FAVE</p>
+    <p class="poster-series" id="poster-series"></p>
     <button class="slab play" id="btn-play">PLAY</button>
     <p class="howto" id="btn-howto">how to play</p>
   </div>
@@ -61,6 +62,7 @@
       <li><b>90 seconds:</b> SLICE → SABOTAGE → SURVIVE. Top score or KO wins.</li>
     </ul>
     <button class="slab" id="btn-howto-back">GOT IT</button>
+    <button class="text-btn small" id="btn-tips-reset">show beginner tips again</button>
   </div>
 </div>
 
@@ -120,12 +122,14 @@
   <div class="panel-card tilt-r">
     <h2 class="results-title" id="results-title"></h2>
     <div class="score-lines" id="results-lines"></div>
-    <div class="stat-lines" id="results-stats"></div>
+    <div class="story" id="results-story"></div>
     <p class="h2h" id="results-h2h"></p>
-    <button class="slab play" id="btn-rematch">REMATCH!</button>
-    <button class="text-btn" id="btn-home">&larr; home</button>
+    <p class="rivalry" id="results-rivalry"></p>
+    <button class="slab play" id="btn-rematch">RUN IT BACK</button>
     <p class="hint" id="results-status"></p>
-    <button class="text-btn small" id="btn-copylog">copy playtest log</button>
+    <button class="text-btn" id="btn-home">&larr; home</button>
+    <details class="more-stats"><summary>match stats</summary><div class="stat-lines" id="results-stats"></div>
+      <button class="text-btn small" id="btn-copylog">copy playtest log</button></details>
   </div>
 </div>
 

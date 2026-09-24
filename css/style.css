@@ -94,6 +94,8 @@ input::placeholder { color: #b9b0a2; }
 .poster-sub { letter-spacing: 4px; font-weight: 900; font-size: 13px; margin: 18px 0 4px; }
 .poster-vs { font-weight: 900; font-size: 17px; color: var(--red); margin: 2px 0 22px; transform: rotate(-1.5deg); }
 .poster-vs span { color: var(--ink); font-size: 13px; }
+.poster-series { font-weight: 900; font-size: 13px; margin: -16px 0 20px; letter-spacing: .5px; }
+.poster-series:empty { display: none; }
 .poster .slab.play { width: min(300px, 80%); }
 .poster-art { position: absolute; inset: 0; pointer-events: none; }
 .poster-art span { position: absolute; line-height: 0; filter: drop-shadow(4px 5px 0 rgba(42,38,36,.28)); }
@@ -285,6 +287,26 @@ input::placeholder { color: #b9b0a2; }
   padding: 5px 12px; transform: rotate(1.2deg);
 }
 .h2h:empty { display: none; }
+/* "unfinished business" — the lines that make you hit RUN IT BACK */
+.story { font-family: "Luckiest Guy", "Arial Black", sans-serif; font-size: 17px; letter-spacing: .5px; line-height: 1.35; margin: 2px 0 12px; }
+.story div:nth-child(odd) { transform: rotate(-1deg); }
+.story div:nth-child(even) { transform: rotate(.8deg); color: var(--red); }
+.story:empty { display: none; }
+.rivalry { font-weight: 900; font-size: 12.5px; color: #7c7468; margin: -6px 0 14px; line-height: 1.5; }
+.rivalry:empty { display: none; }
+.more-stats { margin-top: 8px; }
+.more-stats summary { color: var(--grey); font-weight: 800; font-size: 12px; cursor: pointer; }
+.more-stats .stat-lines { margin-top: 6px; }
+
+/* beginner tips: one short line at the bottom of the board, first few matches only */
+.tip {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%) rotate(-1deg);
+  font-family: "Luckiest Guy", "Arial Black", sans-serif; font-size: 16px; letter-spacing: .5px; white-space: nowrap;
+  color: var(--paper); background: var(--ink); border-radius: 10px; padding: 7px 14px 4px;
+  box-shadow: 3px 3px 0 rgba(42,38,36,.35); z-index: 6; pointer-events: none;
+  animation: tipin .25s ease-out;
+}
+@keyframes tipin { from { opacity: 0; transform: translateX(-50%) translateY(10px) rotate(-1deg); } }
 
 /* ---------- misc ---------- */
 #toasts { position: absolute; top: calc(54px + env(safe-area-inset-top)); left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 50; pointer-events: none; }
@@ -315,5 +337,5 @@ input::placeholder { color: #b9b0a2; }
   #rotate-overlay { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .slab, .wpn, .toast, .coinchip.burst, .meter, .meter-fill { transition: none; animation: none; }
+  .slab, .wpn, .toast, .coinchip.burst, .meter, .meter-fill, .tip { transition: none; animation: none; }
 }

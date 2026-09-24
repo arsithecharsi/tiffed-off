@@ -64,7 +64,19 @@ earnings to ruin each other's run.
 - Matches have chapters: SLICE → **SABOTAGE** (60s left) → **SURVIVE** (30s
   left), with a giant countdown behind the play for the last 10 seconds.
 - **Win by KO** (all 3 of their hearts) **or top score** at 90 seconds.
-- Post-match: stats, trash-talk headlines, and an all-time head-to-head tally.
+- Post-match: a trash-talk headline, then the "unfinished business" — up to
+  three lines picked from the match (TIFF LED UNTIL 0:11, TIFF LANDED 2 MORE
+  PERFECTS, ARSI STOLE $43, BIGGEST LEAD: TIFF +57, KO'D WITH 0:23 LEFT) —
+  and one big **RUN IT BACK** button. Detailed stats and the playtest log sit
+  behind "match stats".
+- **Rivalry:** a running series per pair of names — "TIFF LEADS THE SERIES
+  8–7", plus facts like "ARSI HAS WON 3 STRAIGHT", "TIFF HAS FALLEN FOR 11
+  FAKES", "BIGGEST WIN EVER: …". The home poster shows the series too.
+- **Beginner tips:** for each device's first 3 real matches, a one-line hint
+  appears the first time something comes up (SWIPE THE FRUIT, CUT AT THE TOP
+  OF THE ARC, DON'T CUT BOMBS, GREEN FUSE? TAP IT!, PURPLE SHIMMER = FAKE,
+  SEND AN ATTACK, HEATED). "show beginner tips again" on the how-to screen
+  resets them. Bot practice never shows tips or counts toward the series.
 
 Comeback aid: when you're 2 hearts or 120+ points behind, your income doubles.
 Defense is dodging skill, not a purchase — every attack has real counterplay
@@ -130,8 +142,10 @@ Any static host works; there is no server code.
   attacks per tier, ending coins, average/peak meter, times maxed, PERFECTs,
   CLEAN combos, bomb/fake hits, winner, margin, KO. "copy playtest log" on
   the results card copies it as JSON (`__SS.playtestLog()` in the console).
+- Rivalry records live in localStorage (`ss_rivalry`, keyed by the pair of
+  names), so each device keeps its own copy; the older win-only `ss_h2h`
+  record is carried over the first time a pair plays under the new format.
 - Deliberately deferred until the TIFFED OFF playtest answers its question
-  (per the design notes' "first playtest build"): contextual onboarding,
-  personal records, the rivalry tracker and "RUN IT BACK" results screen,
-  the smooth comeback ramp, starting-economy changes, repeat fatigue on
-  weapons other than Bomb, richer custom sound design.
+  (per the design notes' "first playtest build"): personal records, the
+  smooth comeback ramp, starting-economy changes, repeat fatigue on weapons
+  other than Bomb, richer custom sound design.

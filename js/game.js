@@ -212,6 +212,7 @@
       this.resetMeter();
       this.windUntil = 0; this.windBoost = 0; this.stamp = null;
       this.phaseIdx = 0; this._lastLoopT = 0;
+      this.seenKinds = new Set();
       this.roundDur = dur || ROUND_MS;
       this.roundStart = this.now();
       this.nextNatural = 600;
@@ -766,6 +767,14 @@
         for (const e of this.entities) {
           if (!e.alive) continue;
           const p = this.posOf(e, simT);
+          // first bomb / dud / fake of the round to come into view — main.js hangs beginner tips on it
+          if (p && !e.seen && p.y < this.H - 60 && p.x > 0 && p.x < W) {
+            e.seen = true;
+            if ((e.kind === "bomb" || e.kind === "dud" || e.kind === "trap") && !this.seenKinds.has(e.kind)) {
+              this.seenKinds.add(e.kind);
+              this.onEvent({ t: "seen", kind: e.kind });
+            }
+          }
           if (p && p.falling && p.y > this.H + 130) {
             e.alive = false;
             if (e.kind === "bomb") {

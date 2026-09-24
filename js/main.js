@@ -75,6 +75,7 @@
     $("poster-vs").innerHTML = a && b
       ? esc(a.toUpperCase()) + " <span>vs</span> " + esc(b.toUpperCase())
       : "YOU <span>vs</span> YOUR FAVE";
+    $("poster-series").innerHTML = a && b ? seriesLine(getRivalry(a, b), a, b) : "";
   }
   Assets.ready.then(() => {
     $("poster-art").innerHTML =
@@ -102,7 +103,7 @@
           '<i class="mk" style="left:40%"></i><i class="mk" style="left:70%"></i>' +
           '<span class="meter-label">TIFFED OFF</span><span class="meter-pct">0%</span></div>' +
         (opts.testBar ? '<div class="testbar"><button data-k="lock"></button><button data-k="free">FREE $ + NO CD</button><button data-k="mirror">HIT ME</button><button data-k="bot"></button></div>' : "") +
-        '<div class="arena-wrap"><canvas></canvas><div class="board-announce hidden"></div><div class="countdown hidden"></div></div>' +
+        '<div class="arena-wrap"><canvas></canvas><div class="board-announce hidden"></div><div class="countdown hidden"></div><div class="tip hidden"></div></div>' +
         deckHtml;
       $("boards").appendChild(root);
       this.root = root;
@@ -116,6 +117,8 @@
       this.canvas = root.querySelector("canvas");
       this.announceEl = root.querySelector(".board-announce");
       this.countdownEl = root.querySelector(".countdown");
+      this.tipEl = root.querySelector(".tip");
+      this._tipQ = []; this._tipBusy = false;
       this.coinchip = root.querySelector(".coinchip");
       this.weaponRow = root.querySelector(".weapon-row");
       this._announceT = 0; this._burstT = 0;
@@ -160,6 +163,20 @@
       clearTimeout(this._announceT);
       this._announceT = setTimeout(() => this.announceEl.classList.add("hidden"), ms || 2100);
     }
+    // beginner tips queue up so two never overlap
+    tip(text) {
+      this._tipQ.push(text);
+      if (!this._tipBusy) this.nextTip();
+    }
+    nextTip() {
+      const text = this._tipQ.shift();
+      if (!text) { this._tipBusy = false; this.tipEl.classList.add("hidden"); return; }
+      this._tipBusy = true;
+      this.tipEl.textContent = text;
+      this.tipEl.classList.remove("hidden");
+      this.tipEl.style.animation = "none"; void this.tipEl.offsetWidth; this.tipEl.style.animation = "";
+      setTimeout(() => this.nextTip(), 2400);
+    }
     countdown(text) {
       if (text === null) { this.countdownEl.classList.add("hidden"); return; }
       this.countdownEl.classList.remove("hidden");
@@ -184,7 +201,7 @@
       this.running = false;
       this.bombRun = 0; this.bombRunUntil = 0;   // repeat fatigue
       this.lastW = null;
-      this.pt = { attacks: 0, repeats: 0, tiers: [0, 0, 0, 0] };   // playtest counters
+      this.pt = { attacks: 0, repeats: 0, tiers: [0, 0, 0, 0], stolen: 0 };   // playtest + rivalry counters
       this.btns = {};
       WEAPONS.forEach((w) => {
         const b = document.createElement("button");
@@ -310,7 +327,7 @@
       meterPeak: Math.round(a.meterPeak),
     });
     delete s.meterIntegral; delete s.meterTime;
-    if (d) Object.assign(s, { attacks: d.pt.attacks, repeats: d.pt.repeats, tiers: d.pt.tiers.slice(), endCoins: Math.floor(d.coins) });
+    if (d) Object.assign(s, { attacks: d.pt.attacks, repeats: d.pt.repeats, tiers: d.pt.tiers.slice(), endCoins: Math.floor(d.coins), stolen: d.pt.stolen });
     return s;
   }
 
@@ -330,6 +347,87 @@
       Store.set("ss_playtest", JSON.stringify(log));
     } catch (e) {}
   }
+
+  /* ---------- rivalry: a running series per pair of names, kept on this device ---------- */
+  // declarations (not consts): paintPoster() runs at load, before this point
+  function up(n) { return esc(String(n).toUpperCase()); }
+  function pairKey(a, b) { return [a, b].sort().join("|"); }
+  function loadRivalries() { try { return JSON.parse(Store.get("ss_rivalry") || "{}"); } catch (e) { return {}; } }
+  function getRivalry(a, b) {
+    const rec = loadRivalries()[pairKey(a, b)];
+    if (rec) return rec;
+    // first time under the new format: carry over the old win-only head-to-head
+    let wins = {};
+    try { wins = JSON.parse(Store.get("ss_h2h") || "{}")[pairKey(a, b)] || {}; } catch (e) {}
+    return { wins, ties: 0, streak: null, kos: {}, fakes: {}, stolen: {}, biggest: null, closest: null };
+  }
+  function recordRivalry(outcome, results, names) {
+    const [a, b] = names, rec = getRivalry(a, b);
+    names.forEach((n) => {
+      const st = (results[n] || {}).stats || {};
+      rec.fakes[n] = (rec.fakes[n] || 0) + (st.fakeHits || 0);
+      rec.stolen[n] = (rec.stolen[n] || 0) + (st.stolen || 0);
+    });
+    if (outcome.tie) { rec.ties++; rec.streak = null; }
+    else {
+      const w = outcome.winner, margin = results[w].score - results[outcome.loser].score;
+      rec.wins[w] = (rec.wins[w] || 0) + 1;
+      rec.streak = rec.streak && rec.streak.name === w ? { name: w, n: rec.streak.n + 1 } : { name: w, n: 1 };
+      if (outcome.ko) rec.kos[w] = (rec.kos[w] || 0) + 1;
+      if (!rec.biggest || margin > rec.biggest.margin) rec.biggest = { name: w, margin };
+      if (!rec.closest || margin < rec.closest.margin) rec.closest = { name: w, margin };
+    }
+    try { const all = loadRivalries(); all[pairKey(a, b)] = rec; Store.set("ss_rivalry", JSON.stringify(all)); } catch (e) {}
+    return rec;
+  }
+  function seriesLine(rec, a, b) {
+    const wa = rec.wins[a] || 0, wb = rec.wins[b] || 0;
+    if (!wa && !wb) return "";
+    if (wa === wb) return "SERIES TIED " + wa + "–" + wb;
+    return wa > wb ? up(a) + " LEADS THE SERIES " + wa + "–" + wb : up(b) + " LEADS THE SERIES " + wb + "–" + wa;
+  }
+  function rivalryFacts(rec, names) {
+    const f = [];
+    if (rec.streak && rec.streak.n >= 2) f.push(up(rec.streak.name) + " HAS WON " + rec.streak.n + " STRAIGHT");
+    names.forEach((n) => { if ((rec.fakes[n] || 0) >= 3) f.push(up(n) + " HAS FALLEN FOR " + rec.fakes[n] + " FAKES"); });
+    if (rec.biggest && rec.biggest.margin >= 50) f.push("BIGGEST WIN EVER: " + up(rec.biggest.name) + " BY " + rec.biggest.margin);
+    return f.slice(0, 2);
+  }
+
+  // "unfinished business": the 2-3 most rematch-worthy facts about the match just played
+  function storyLines(outcome, results, timeline) {
+    if (outcome.tie) return [];
+    const w = outcome.winner, l = outcome.loser, out = [];
+    if (outcome.ko && outcome.koLeft > 0) out.push("KO'D WITH " + clock(outcome.koLeft) + " LEFT");
+    let loserLedAt = null, big = { name: null, lead: 0 };
+    timeline.forEach((smp) => {
+      const d = smp[w] - smp[l];
+      if (d < 0) loserLedAt = smp.t;
+      if (Math.abs(d) > big.lead) big = { name: d >= 0 ? w : l, lead: Math.abs(d) };
+    });
+    if (loserLedAt !== null) out.push(up(l) + " LED UNTIL " + clock(ROUND_MS - loserLedAt));
+    else if (timeline.length > 10) out.push(up(w) + " LED WIRE TO WIRE");
+    const sw = results[w].stats || {}, sl = results[l].stats || {};
+    const pd = (sl.perfects || 0) - (sw.perfects || 0);
+    if (pd > 0) out.push(up(l) + " LANDED " + pd + " MORE PERFECT" + (pd > 1 ? "S" : ""));
+    const thief = (sw.stolen || 0) >= (sl.stolen || 0) ? w : l, took = Math.max(sw.stolen || 0, sl.stolen || 0);
+    if (took > 0) out.push(up(thief) + " STOLE $" + took);
+    if (big.lead >= 20) out.push("BIGGEST LEAD: " + up(big.name) + " +" + Math.round(big.lead));
+    return out.slice(0, 3);
+  }
+
+  /* ---------- beginner tips: one line the first time each thing happens ---------- */
+  const TIP_MATCHES = 3;   // real (non-bot) matches per device before tips switch off
+  const TIPS = {
+    start: "SWIPE THE FRUIT",
+    apex: "CUT AT THE TOP OF THE ARC = PERFECT",
+    bomb: "DON'T CUT BOMBS",
+    dud: "GREEN FUSE? TAP IT!",
+    trap: "PURPLE SHIMMER = FAKE",
+    attack: "SEND AN ATTACK ↓",
+    heated: "HEATED — YOUR ATTACKS HIT HARDER",
+  };
+  const matchesPlayed = () => parseInt(Store.get("ss_matches") || "0", 10) || 0;
 
   /* ================================================================
      Bot — the GOD BOT opponent for practice/test mode. It speaks the same
@@ -455,12 +553,14 @@
       this.boards = [];
       this.results = {};                 // name -> {score, reason, stats}
       this.themState = { score: 0, hearts: HEARTS, tier: 0 };
+      this.timeline = [];                // {t, [name]: score} every 500ms — the results screen's story
       $("boards").innerHTML = "";
       show("screen-game");
 
       // solo = practice/test mode vs the GOD BOT, which stands in for a remote phone
       this.bot = mode === "solo" ? new Bot(this) : null;
       this.test = { lock: -1, free: false, mirror: false };
+      this.tips = !this.bot && matchesPlayed() < TIP_MATCHES;
       if (mode === "couch") {
         this.boards.push(this.makeBoard({ name: S.p2Name, rot: true }));
         this.boards.push(this.makeBoard({ name: S.myName, rot: false }));
@@ -473,26 +573,25 @@
         this.wireTestBar(this.boards[0]);
         this._tiv = setInterval(() => this.applyTest(this.boards[0]), 100);
       }
-      if (mode !== "couch") {
-        this._stiv = setInterval(() => {
+      this._stiv = setInterval(() => {
+        if (mode === "couch") {
+          const [a, b] = this.boards;
+          a.deck.comeback = b.arena.score - a.arena.score > 120 || b.arena.hearts - a.arena.hearts >= 2;
+          b.deck.comeback = a.arena.score - b.arena.score > 120 || a.arena.hearts - b.arena.hearts >= 2;
+        } else {
           const b = this.boards[0];
           this.send({ t: "st", score: b.arena.score, hearts: b.arena.hearts, tier: b.arena.tier() });
           // comeback aid when clearly behind
           b.deck.comeback = this.themState.score - b.arena.score > 120 || this.themState.hearts - b.arena.hearts >= 2;
-        }, 500);
-      } else if (mode === "couch") {
-        this._stiv = setInterval(() => {
-          const [a, b] = this.boards;
-          a.deck.comeback = b.arena.score - a.arena.score > 120 || b.arena.hearts - a.arena.hearts >= 2;
-          b.deck.comeback = a.arena.score - b.arena.score > 120 || a.arena.hearts - b.arena.hearts >= 2;
-        }, 500);
-      }
+        }
+        this.sample();
+      }, 500);
       this.countdownThenStart();
     }
 
     makeBoard(opts) {
       const ui = new BoardUI(opts);
-      const board = { ui, name: opts.name, timeouts: new Set() };
+      const board = { ui, name: opts.name, timeouts: new Set(), tipsShown: new Set() };
       board.arena = new Arena(ui.canvas, {
         rotated: opts.rot,
         onCoin: (n) => board.deck.addCoins(n),
@@ -509,6 +608,24 @@
     }
 
     otherBoard(board) { return this.boards.find((b) => b !== board); }
+
+    scoreOf(name) {
+      const b = this.boards.find((x) => x.name === name);
+      return b ? b.arena.score : this.themState.score;
+    }
+    sample() {
+      const a = this.boards[0].arena;
+      if (!a.running) return;
+      const smp = { t: a.simT() };
+      this.names().forEach((n) => { smp[n] = this.scoreOf(n); });
+      this.timeline.push(smp);
+    }
+
+    tip(board, key) {
+      if (!this.tips || board.tipsShown.has(key)) return;
+      board.tipsShown.add(key);
+      board.ui.tip(TIPS[key]);
+    }
 
     // to the other player: over the network, or straight to the bot in practice
     send(m) { if (this.bot) this.bot.receive(m); else Net.send(m); }
@@ -585,10 +702,13 @@
         if (this.mode === "couch") {
           const other = this.otherBoard(board);
           other.deck.addCoins(stolen);
+          other.deck.pt.stolen += stolen;
           other.ui.announce("STOLE $" + stolen, 1000);
         } else {
           this.send({ t: "trapped", stolen });
         }
+      } else if (m.t === "seen") {
+        this.tip(board, m.kind);
       } else if (m.t === "phase") {
         board.ui.announce('<span class="warn">' + m.name + "!</span>", 1000);
         if (board === this.boards[this.boards.length - 1]) SFX.phase();
@@ -604,6 +724,8 @@
       board.ui.setMe(board.name, st.hearts, st.score);
       board.ui.setMeter(st.meter, st.tier, st.streak);
       board.ui.setTimer(st.left);
+      if (st.elapsed > 9000 && board.deck.coins >= 20) this.tip(board, "attack");
+      if (st.tier >= 1) this.tip(board, "heated");
       if (this.mode === "couch") {
         const other = this.otherBoard(board);
         board.ui.setThem(other.name, other.arena.hearts, other.arena.score, other.arena.tier());
@@ -623,6 +745,7 @@
       }
       else if (m.t === "trapped") {
         me.deck.addCoins(m.stolen);
+        me.deck.pt.stolen += m.stolen;
         me.ui.announce("STOLE $" + m.stolen, 1000);
       }
       else if (m.t === "st") { this.themState.score = m.score; this.themState.hearts = m.hearts; this.themState.tier = m.tier | 0; }
@@ -642,7 +765,12 @@
           this.boards.forEach((b) => b.ui.countdown("SLICE!"));
           SFX.combo(4);
           setTimeout(() => this.boards.forEach((b) => b.ui.countdown(null)), 500);
-          this.boards.forEach((b) => { b.arena.resize(); b.arena.startRound(ROUND_MS); b.deck.start(); });
+          this.boards.forEach((b) => {
+            b.arena.resize(); b.arena.startRound(ROUND_MS); b.deck.start();
+            this.tip(b, "start");
+            const to = setTimeout(() => { b.timeouts.delete(to); this.tip(b, "apex"); }, 5000);
+            b.timeouts.add(to);
+          });
           if (this.bot) this.bot.start();
           return;
         }
@@ -669,7 +797,7 @@
             stats: wb ? boardStats(wb) : null,
           };
         }
-        this.finish({ winner, loser, ko: true });
+        this.finish({ winner, loser, ko: true, koLeft: ROUND_MS - this.boards[0].arena.simT() });
         return;
       }
       if (names.every((n) => this.results[n])) {
@@ -696,6 +824,12 @@
         const r = this.results[n] || { score: 0 };
         return (outcome.winner === n ? "👑 " : "") + esc(n) + ": <b>" + r.score + "</b>" + (r.reason === "ko" ? " (KO'd)" : "");
       }).join("<br>");
+      // close the lead history on the final scores (the round has already stopped sampling)
+      const last = this.timeline[this.timeline.length - 1];
+      const fin = { t: last ? last.t : 0 };
+      names.forEach((n) => { fin[n] = (this.results[n] || {}).score || 0; });
+      this.timeline.push(fin);
+      $("results-story").innerHTML = storyLines(outcome, this.results, this.timeline).map((x) => "<div>" + x + "</div>").join("");
       $("results-stats").innerHTML = names.map((n) => {
         const st = (this.results[n] || {}).stats;
         if (!st) return "";
@@ -703,8 +837,17 @@
         return "<b>" + esc(n) + "</b> — " + st.fruit + " fruit · " + (st.perfects || 0) + " perfect · best ×" + (st.bestCombo || 0) + " · dodged " + st.bombsDodged + " · " + (st.dudsDefused || 0) + " defused · sent " + (st.attacks || 0) +
           (pl ? '<br><span class="pt">' + pl + "</span>" : "");
       }).filter(Boolean).join("<br>");
-      if (!this.bot) this.logResult(outcome, names);
-      $("results-h2h").textContent = outcome.tie || this.bot ? "" : this.recordWin(outcome.winner, outcome.loser);
+      // bot practice never counts toward the series, the playtest log or the tip countdown
+      if (!this.bot) {
+        this.logResult(outcome, names);
+        const rec = recordRivalry(outcome, this.results, names);
+        $("results-h2h").innerHTML = seriesLine(rec, names[0], names[1]);
+        $("results-rivalry").innerHTML = rivalryFacts(rec, names).join("<br>");
+        Store.set("ss_matches", String(matchesPlayed() + 1));
+      } else {
+        $("results-h2h").innerHTML = "";
+        $("results-rivalry").innerHTML = "";
+      }
       $("btn-rematch").disabled = false;
       $("results-status").textContent = "";
       S.myReady = S.theirReady = false;
@@ -713,7 +856,6 @@
       show("screen-results");
     }
 
-    // bot practice is never logged — it would skew the playtest data and the head-to-head
     logResult(outcome, names) {
       const players = {};
       names.forEach((n) => { const r = this.results[n]; if (r) players[n] = Object.assign({ score: r.score }, r.stats || {}); });
@@ -722,19 +864,6 @@
         at: new Date().toISOString(), mode: this.mode, winner: outcome.winner || null, ko: !!outcome.ko,
         margin: outcome.tie ? 0 : ra && rb ? ra.score - rb.score : null, players,
       });
-    }
-
-    recordWin(winner, loser) {
-      try {
-        const all = JSON.parse(Store.get("ss_h2h") || "{}");
-        const key = [winner, loser].sort().join("|");
-        const rec = all[key] || {};
-        rec[winner] = (rec[winner] || 0) + 1;
-        all[key] = rec;
-        Store.set("ss_h2h", JSON.stringify(all));
-        const [a, b] = key.split("|");
-        return a.toUpperCase() + " " + (rec[a] || 0) + " – " + (rec[b] || 0) + " " + b.toUpperCase();
-      } catch (e) { return ""; }
     }
 
     stop() {
@@ -756,6 +885,7 @@
   $("btn-mode-back").onclick = () => { paintPoster(); show("screen-home"); };
   $("btn-howto").onclick = () => show("screen-howto");
   $("btn-howto-back").onclick = () => show("screen-home");
+  $("btn-tips-reset").onclick = () => { Store.set("ss_matches", "0"); toast("Tips will show in your next " + TIP_MATCHES + " matches"); };
   $("btn-online").onclick = () => {
     Store.set("ss_name", myName());
     $("online-hosting").classList.add("hidden");
